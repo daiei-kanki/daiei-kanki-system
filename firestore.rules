@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ヘルパー関数: 認証済みかどうかを確認
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // materials コレクション: 認証済みユーザーのみ読み書き可
+    match /materials/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // customers コレクション: 認証済みユーザーのみ読み書き可
+    match /customers/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // pricingRules コレクション: 認証済みユーザーのみ読み書き可
+    match /pricingRules/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // slips コレクション: 認証済みユーザーのみ読み書き可
+    match /slips/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // estimates コレクション: 認証済みユーザーのみ読み書き可
+    match /estimates/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // purchaseOrders コレクション: 認証済みユーザーのみ読み書き可
+    match /purchaseOrders/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // settings コレクション: 認証済みユーザーのみ読み書き可
+    match /settings/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // その他のコレクションはすべて拒否（デフォルト）
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

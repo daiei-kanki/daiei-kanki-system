@@ -1,0 +1,7 @@
+{
+  "name": "Piping Materials Manager Pro",
+  "description": "A high-end construction piping materials management application with real-time Firestore synchronization and secure Google Authentication.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
