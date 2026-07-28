@@ -16,9 +16,9 @@ const BROWSER_CONSOLE_CODE = `
   const { getFirestore, collection, getCountFromServer } = await import('https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js');
   
   const app = initializeApp({
-    projectId: "gen-lang-client-0252940162",
-    apiKey: "AIzaSyD71H8mkXIHc_zY1UspZBUMwKnZ9bZEJnI",
-    authDomain: "gen-lang-client-0252940162.firebaseapp.com",
+    projectId: "daiei-corexia",
+    apiKey: "AIzaSyAPvMZvLIXBHfY-jb6Y-5OA-HmPOgf5Z1E",
+    authDomain: "daiei-corexia.firebaseapp.com",
   }, "counter-app");
   
   const db = getFirestore(app);
