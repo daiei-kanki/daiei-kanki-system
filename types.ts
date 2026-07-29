@@ -68,12 +68,20 @@ export interface SortConfig {
   direction: SortDirection;
 }
 
+export interface CustomerSite {
+  id: string;
+  name: string;
+  isClosed?: boolean;
+  notes?: string;
+  createdAt?: number;
+}
+
 export interface Customer {
   id: string;
   name: string;
   closingDay?: number;
   email?: string;
-  sites?: { id: string; name: string; isClosed?: boolean }[];
+  sites?: CustomerSite[];
 }
 
 export interface PricingRule {
@@ -91,9 +99,10 @@ export interface PricingRule {
   value: number;
 }
 
-export type SlipType = 'outbound' | 'provisional' | 'delivery' | 'invoice' | 'return' | 'reslip' | 'cover';
+export type ItemKind = '材料' | '工事費' | '外注費' | 'その他';
 
 export interface SlipItem extends Material {
+  itemKind?: ItemKind; // 明細の種類（材料/工事費/外注費/その他）
   quantity: number;
   deliveredQuantity?: number;
   appliedPrice: number;

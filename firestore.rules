@@ -42,6 +42,11 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
     }
 
+    // users コレクション: 認証済みユーザーのみ読み書き可
+    match /users/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
     // その他のコレクションはすべて拒否（デフォルト）
     match /{document=**} {
       allow read, write: if false;

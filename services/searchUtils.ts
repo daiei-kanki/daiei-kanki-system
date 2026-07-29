@@ -102,12 +102,13 @@ export const normalizeForSearch = (text: string): string => {
     // 5. Lowercase
     normalized = normalized.toLowerCase();
 
-    // 6. Unify hyphens/dashes to "-"
-    // NOTE: 文字クラス内で「－-」と書くと U+FF0D〜U+002D の範囲指定になり無効なため、
-    //       各文字を個別にリストアップする
+    // 6. Unify dimension/multiplication symbols (× ✕ ✖ * ＊ x X -> x)
+    normalized = normalized.replace(/[×✕✖*＊]/g, 'x');
+
+    // 7. Unify hyphens/dashes to "-"
     normalized = normalized.replace(/[ーｰ－‐‑‒–—―⁃\-]/g, '-');
 
-    // 7. Space normalization
+    // 8. Space normalization (full-width to half-width)
     normalized = normalized.replace(/　/g, ' ');
     normalized = normalized.replace(/\s+/g, ' ');
 
@@ -154,9 +155,11 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
     if (!customerRules) {
         const sc = strictNorm(activeCustomer);
         customerRules = pricingRules.filter(r => {
+            // 1. customerId による完全ID一致（最優先）
+            if (r.customerId && r.customerId === activeCustomer) return true;
+            // 2. customerName による厳格完全一致（社名類似による別会社誤用を防ぐ）
             const rSc = strictNorm(r.customerName);
-            // 1. 完全一致 2. ルール名が顧客名に含まれる 3. 顧客名がルール名に含まれる
-            return rSc === sc || (rSc.length > 2 && sc.includes(rSc)) || (sc.length > 2 && rSc.includes(sc));
+            return rSc === sc;
         });
         customerRulesCache.set(activeCustomer, customerRules);
     }
@@ -164,17 +167,18 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
     if (customerRules.length === 0) return basePrice;
 
     const findBestRule = (scopeRules: PricingRule[]) => {
-        // 1. Exact Material ID Match
-        let r = scopeRules.find(r => r.materialId === item.id);
+        // 1. Exact Material ID Match (資材背番号の一致を最優先)
+        let r = scopeRules.find(r => r.materialId && r.materialId === item.id);
         if (r) return r;
 
-        // 2. Name + Category + Model + Dimensions Match (very specific)
+        // 2. Name + Category + Model + Dimensions Match (特定資材ID未指定ルールのみ対象)
         const normName = normalizeForSearch(item.name);
         const normCat = normalizeForSearch(item.category);
         const normModel = normalizeForSearch(item.model || '');
         const normDims = normalizeForSearch(item.dimensions || '');
         
         r = scopeRules.find(r => 
+            !r.materialId &&
             normalizeForSearch(r.materialName || '') === normName &&
             normalizeForSearch(r.category) === normCat &&
             normalizeForSearch(r.model || '') === normModel &&
@@ -184,27 +188,28 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
 
         // 3. Name + Category + Model Match
         r = scopeRules.find(r => 
+            !r.materialId &&
             normalizeForSearch(r.materialName || '') === normName &&
             normalizeForSearch(r.category) === normCat &&
             normalizeForSearch(r.model || '') === normModel
         );
         if (r) return r;
 
-        // 3. Category + Model Match
+        // 4. Category + Model Match
         if (item.model) {
             r = scopeRules.find(r => 
+                !r.materialId &&
                 normalizeForSearch(r.category) === normCat && 
-                normalizeForSearch(r.model || '') === normModel && 
-                !r.materialId
+                normalizeForSearch(r.model || '') === normModel
             );
             if (r) return r;
         }
 
-        // 4. Category Match (model: 'All')
+        // 5. Category Match (model: 'All')
         r = scopeRules.find(r => 
+            !r.materialId &&
             normalizeForSearch(r.category) === normCat && 
-            (!r.model || r.model === 'All' || r.model === '') && 
-            !r.materialId
+            (!r.model || r.model === 'All' || r.model === '')
         );
         return r;
     };

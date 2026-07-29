@@ -423,7 +423,9 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
                                         <div className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">{item.category}</div>
                                     </td>
                                     <td className="p-2">
-                                        <div className="font-bold text-slate-600 text-xs">{item.model} {item.dimensions}</div>
+                                        <div className="font-bold text-slate-600 text-xs font-mono">
+                                            {[item.model, item.dimensions, item.size ? `規格: ${item.size}` : ''].filter(Boolean).join(' / ')}
+                                        </div>
                                         <div className="flex items-center gap-2 mt-0.5">
                                             <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{item.manufacturer}</span>
                                             {item.location && <span className="text-[9px] font-black px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded border border-indigo-100">{item.location}</span>}

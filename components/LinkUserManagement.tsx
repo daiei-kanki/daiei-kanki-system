@@ -151,6 +151,7 @@ export const LinkUserManagement: React.FC = () => {
                 <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800">
                     <UserCheck className="text-blue-600" />
                     LINKユーザー管理
+                    <span className="text-xs bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full font-bold">【蓋対象・本稼働準備中】</span>
                 </h2>
                 <div className="flex bg-slate-100 p-1 rounded-lg">
                     {(['all', 'pending', 'approved'] as const).map(f => (
@@ -168,6 +169,10 @@ export const LinkUserManagement: React.FC = () => {
                         </button>
                     ))}
                 </div>
+            </div>
+
+            <div className="mx-6 mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs font-bold flex items-center gap-2">
+                <span>🔒 社員・職人向けのスマホLINK連携機能は本稼働準備中のため【蓋（ボタン抑止）】が適用されています。実運用開始に合わせて順次機能を解放します。</span>
             </div>
 
             <div className="flex-1 overflow-auto p-6">

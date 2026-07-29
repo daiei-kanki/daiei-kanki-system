@@ -25,9 +25,13 @@ export const PurchaseOrderManager: React.FC<PurchaseOrderManagerProps> = ({ mast
     const [suggestionType, setSuggestionType] = useState<'name' | 'model' | 'dimensions' | null>(null);
     const [query, setQuery] = useState('');
 
-    const suggestions = useMemo(() => {
-        if (suggestionIdx === null) return [];
-        return filterAndSortItems(masterItems, query).slice(0, 100);
+    const { suggestions, totalPOItemMatches } = useMemo(() => {
+        if (suggestionIdx === null) return { suggestions: [], totalPOItemMatches: 0 };
+        const matches = filterAndSortItems(masterItems, query);
+        return {
+            suggestions: matches.slice(0, 100),
+            totalPOItemMatches: matches.length
+        };
     }, [query, masterItems, suggestionIdx]);
 
     const handleSelect = (idx: number, item: MaterialItem) => {
@@ -378,6 +382,9 @@ export const PurchaseOrderManager: React.FC<PurchaseOrderManagerProps> = ({ mast
                                                                     {item?.manufacturer && <div className="text-[7px] text-slate-400 font-normal truncate leading-none mt-0.5">{item.manufacturer}</div>}
                                                                     {suggestionIdx === idx && suggestions.length > 0 && (
                                                                         <div className="absolute top-[80%] left-0 z-[300] bg-white border-2 border-emerald-500 rounded-xl shadow-2xl w-96 max-h-64 overflow-auto mt-1 no-print">
+                                                                            <div className="sticky top-0 bg-slate-100 border-b px-3 py-1.5 flex justify-between items-center text-[9px] font-bold text-slate-500 z-10">
+                                                                                <span>全{masterItems.length.toLocaleString()}件の資材から検索中 ({totalPOItemMatches.toLocaleString()}件一致)</span>
+                                                                            </div>
                                                                             {suggestions.map((s, i) => (
                                                                                 <div key={i} onClick={() => handleSelect(idx, s)} className="px-3 py-2 hover:bg-emerald-50 cursor-pointer border-b last:border-b-0">
                                                                                     <div className="font-black text-[12px] text-slate-800">{s.name}</div>

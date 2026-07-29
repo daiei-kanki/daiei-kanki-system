@@ -126,10 +126,25 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
             const site = siteNameInput.trim() || ""; // undefinedではなく空文字を明示
             const newRules: Omit<PricingRule, 'id'>[] = [];
 
-            targetCustomers.forEach(customer => {
+            for (const customer of targetCustomers) {
+                let siteId: string | undefined = undefined;
+                if (site) {
+                    const existingSite = customer.sites?.find(s => s.name === site);
+                    if (existingSite) {
+                        siteId = existingSite.id;
+                    } else {
+                        const newSite = { id: crypto.randomUUID(), name: site, createdAt: Date.now() };
+                        const updatedSites = [...(customer.sites || []), newSite];
+                        siteId = newSite.id;
+                        await storage.updateCustomer(customer.id, { sites: updatedSites });
+                    }
+                }
+
                 checkedCategories.forEach(cat => {
                     newRules.push({
+                        customerId: customer.id,
                         customerName: customer.name,
+                        siteId,
                         siteName: site,
                         category: cat,
                         model: 'All',
@@ -141,7 +156,9 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
                     const item = items.find(i => i.id === mId);
                     if (item) {
                         newRules.push({
+                            customerId: customer.id,
                             customerName: customer.name,
+                            siteId,
                             siteName: site,
                             category: item.category,
                             model: item.model || '',
@@ -153,7 +170,7 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
                         });
                     }
                 });
-            });
+            }
 
             await Promise.all(newRules.map(r => storage.addPricingRule(r)));
 

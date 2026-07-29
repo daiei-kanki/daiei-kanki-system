@@ -119,8 +119,9 @@ const ReturnResolutionModal = ({ results, onApply, onClose }: { results: any[], 
 const generateSlipNumber = () => {
     const d = new Date();
     const datePart = `${d.getFullYear()}${(d.getMonth() + 1).toString().padStart(2, '0')}${d.getDate().toString().padStart(2, '0')}`;
-    const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase();
-    return `${datePart}-${randomPart}`;
+    const timePart = `${d.getHours().toString().padStart(2, '0')}${d.getMinutes().toString().padStart(2, '0')}${d.getSeconds().toString().padStart(2, '0')}`;
+    const uniqueHash = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `${datePart}-${timePart}-${uniqueHash}`;
 };
 
 const normalize = (s: string) => s.toLowerCase().trim();
@@ -1116,20 +1117,15 @@ export const SlipManager: React.FC<{
             .filter(i => i.availableQuantity > 0);
     }, [customerName, siteName, slips]);
 
-    const itemSuggestions = useMemo(() => {
-        if (!itemSearchQuery.trim()) return [];
-        if (activeMode === 'return') {
-            const query = normalizeForSearch(itemSearchQuery);
-            return siteHistoryItems
-                .filter(i => 
-                    normalizeForSearch(i.name).includes(query) ||
-                    normalizeForSearch(i.model || '').includes(query) ||
-                    normalizeForSearch(i.dimensions || '').includes(query)
-                )
-                .sort((a, b) => naturalCompare(a.name + (a.dimensions || ''), b.name + (b.dimensions || '')))
-                .slice(0, 100);
-        }
-        return filterAndSortItems(masterItems, itemSearchQuery).slice(0, 100);
+    const { itemSuggestions, totalMatchingCount } = useMemo(() => {
+        if (!itemSearchQuery.trim()) return { itemSuggestions: [], totalMatchingCount: 0 };
+        const allMatches = activeMode === 'return'
+            ? filterAndSortItems(siteHistoryItems as any[], itemSearchQuery)
+            : filterAndSortItems(masterItems, itemSearchQuery);
+        return {
+            itemSuggestions: allMatches.slice(0, 100),
+            totalMatchingCount: allMatches.length
+        };
     }, [itemSearchQuery, masterItems, activeMode, siteHistoryItems]);
 
     const handleAddFromMaster = (item: any) => {
@@ -1229,7 +1225,13 @@ export const SlipManager: React.FC<{
         if (!customerName || cart.length === 0 || !receivingPerson.trim()) {
             return alert("必須項目（顧客、受付担当）を入力してください。");
         }
-        setIsSaving(true);
+
+        // F-10 / No.12: 仕入値（原価）無しの行がある場合は請求を行えないガード
+        const missingCostItems = cart.filter(i => (i.costPrice == null || i.costPrice <= 0) && !i.name.includes('【調整品目】'));
+        if (missingCostItems.length > 0 && (activeMode as string) === 'invoice') {
+            const names = missingCostItems.map(i => i.name || '名称未設定').join(', ');
+            return alert(`⚠️ 請求発行ガード（No.12）: 以下の明細に仕入値（原価）が設定されていません。仕入値を入力してください。\n対象: ${names}`);
+        }
         try {
             const processedItems = cart.map((i: SlipItem) => {
                 const qty = i.quantity;
@@ -1260,14 +1262,27 @@ export const SlipManager: React.FC<{
                 return s + ((i.appliedPrice || 0) * qtyToUse);
             }, 0);
 
-            const matchedCustomer = customers.find(c => c.name === customerName);
-            const customerId = matchedCustomer?.id;
-            const siteId = matchedCustomer?.sites?.find((s: any) => s.name === siteName)?.id;
+            const matchedCustomer = customers.find(c => c.name === customerName || c.id === customerId);
+            const finalCustomerId = matchedCustomer?.id || customerId;
+            let finalSiteId: string | undefined = undefined;
+
+            if (matchedCustomer && siteName && siteName.trim()) {
+                const sTrim = siteName.trim();
+                const existingSite = matchedCustomer.sites?.find((s: any) => s.name === sTrim);
+                if (existingSite) {
+                    finalSiteId = existingSite.id;
+                } else {
+                    const newSite = { id: generateId(), name: sTrim, createdAt: Date.now() };
+                    const updatedSites = [...(matchedCustomer.sites || []), newSite];
+                    finalSiteId = newSite.id;
+                    await storage.updateCustomer(matchedCustomer.id, { sites: updatedSites });
+                }
+            }
 
             if (editingSlipId) {
                 const updateData: Partial<Slip> = {
                     date: slipDate, orderDate, customerName, constructionName: siteName, 
-                    customerId, siteId, items: processedItems,
+                    customerId: finalCustomerId, siteId: finalSiteId, items: processedItems,
                     totalAmount: total, taxAmount: Math.round(total * 0.1), grandTotal: Math.round(total * 1.1),
                     note, deliveryTime: time, deliveryDestination: dest, orderingPerson, customerOrderNumber, receivingPerson
                 };
@@ -1285,7 +1300,7 @@ export const SlipManager: React.FC<{
                 const sNo = generateSlipNumber();
                 const newSlip: Omit<Slip, 'id'> = {
                     createdAt: Date.now(), date: slipDate, orderDate, customerName, constructionName: siteName, 
-                    customerId, siteId, items: processedItems.map(i => ({ ...i, sourceSlipNo: sNo })),
+                    customerId: finalCustomerId, siteId: finalSiteId, items: processedItems.map(i => ({ ...i, sourceSlipNo: sNo })),
                     totalAmount: total, taxAmount: Math.round(total * 0.1), grandTotal: Math.round(total * 1.1),
                     note, deliveryTime: time, deliveryDestination: dest, groupId: gid, slipNumber: sNo,
                     orderingPerson, customerOrderNumber, receivingPerson, type: activeMode === 'return' ? 'return' : 'outbound', isClosed: activeMode === 'return',
@@ -2029,7 +2044,11 @@ export const SlipManager: React.FC<{
                                                     {showItemSuggestions && itemSuggestions.length > 0 && (
                                                         <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 shadow-[0_20px_50px_rgba(0,0,0,0.2)] z-[100] rounded-[1.5rem] mt-2 flex flex-col overflow-hidden max-h-[440px]">
                                                             <div className="bg-slate-50 px-4 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b flex justify-between items-center">
-                                                                <span>検索結果 ({itemSuggestions.length}件)</span>
+                                                                <span>
+                                                                    {totalMatchingCount > 100
+                                                                        ? `上位100件表示中 (全 ${totalMatchingCount.toLocaleString()} 件) — キーワードを追加して絞り込んでください`
+                                                                        : `検索結果 (${totalMatchingCount}件)`}
+                                                                </span>
                                                                 {selectedSuggestions.size > 0 && <span className="text-blue-600">{selectedSuggestions.size}件 選択中</span>}
                                                             </div>
                                                             <div className="flex-grow overflow-y-auto divide-y divide-slate-100">
@@ -2326,16 +2345,9 @@ export const SlipManager: React.FC<{
                                             </button>
                                         )}
                                         <button
-                                            onClick={() => {
-                                                const info = settings || DEFAULT_COMPANY_INFO;
-                                                const customer = customers.find(c => c.name === s.customerName);
-                                                const email = customer?.email || "";
-                                                const subject = `【${info.companyName}】${getSlipLabel(s.type, s.constructionName)}のご案内 (#${s.slipNumber})`;
-                                                const body = `${s.customerName} 様\n\n平素より大変お世話になっております。${info.companyName}でございます。\n${s.constructionName || "一般"} 現場の${getSlipLabel(s.type, s.constructionName)}をお送りいたします。\n\n詳細につきましては、本メールまたはシステム画面よりご確認ください。\n\n--------------------------------------------------\n発行番号: ${s.slipNumber}\n発行日: ${s.date}\n計金額 (税抜): ¥${(s.totalAmount || 0).toLocaleString()}\n--------------------------------------------------\n\nご確認のほど何卒よろしくお願い申し上げます。\n\n${info.companyName}\n${info.address}\nTEL: ${info.phone}\n${info.email}`;
-                                                window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-                                            }}
-                                            className="p-3 text-slate-500 hover:text-blue-500 hover:bg-blue-50 rounded-2xl transition-all"
-                                            title="メールで送信"
+                                            disabled
+                                            className="p-3 text-slate-300 opacity-30 cursor-not-allowed rounded-2xl transition-all"
+                                            title="[準備中] 請求メール直接送信機能は蓋（非活性）が適用されています"
                                         >
                                             <Mail size={20} />
                                         </button>

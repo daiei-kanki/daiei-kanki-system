@@ -23,10 +23,10 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedItem, setSelectedItem] = useState<MaterialItem | null>(null);
 
-    // Filter items based on search
+    // Filter items based on search (No.15: 初期表示全件8104件描画によるフリーズ防止)
     const filteredItems = useMemo(() => {
-        if (!searchQuery.trim()) return items;
-        return filterAndSortItems(items, searchQuery);
+        if (!searchQuery.trim()) return [];
+        return filterAndSortItems(items, searchQuery).slice(0, 100);
     }, [items, searchQuery]);
 
     return (
@@ -114,7 +114,11 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
                                                     </div>
                                                 )}
                                             </div>
-                                            {item.model && <p className="text-[10px] sm:text-xs text-slate-500 font-mono mt-1">{item.model} {item.dimensions}</p>}
+                                            {(item.model || item.dimensions || item.size) && (
+                                                <p className="text-[10px] sm:text-xs text-slate-500 font-mono mt-1">
+                                                    {[item.model, item.dimensions, item.size ? `規格: ${item.size}` : ''].filter(Boolean).join(' / ')}
+                                                </p>
+                                            )}
                                         </div>
                                         <div className="text-right shrink-0">
                                             <div className="text-base sm:text-lg font-black text-indigo-700 font-mono">¥{appliedPrice.toLocaleString()}</div>
