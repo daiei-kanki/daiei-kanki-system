@@ -171,14 +171,13 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
         let r = scopeRules.find(r => r.materialId && r.materialId === item.id);
         if (r) return r;
 
-        // 2. Name + Category + Model + Dimensions Match (特定資材ID未指定ルールのみ対象)
+        // 2. Name + Category + Model + Dimensions Match
         const normName = normalizeForSearch(item.name);
         const normCat = normalizeForSearch(item.category);
         const normModel = normalizeForSearch(item.model || '');
         const normDims = normalizeForSearch(item.dimensions || '');
         
         r = scopeRules.find(r => 
-            !r.materialId &&
             normalizeForSearch(r.materialName || '') === normName &&
             normalizeForSearch(r.category) === normCat &&
             normalizeForSearch(r.model || '') === normModel &&
@@ -188,7 +187,6 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
 
         // 3. Name + Category + Model Match
         r = scopeRules.find(r => 
-            !r.materialId &&
             normalizeForSearch(r.materialName || '') === normName &&
             normalizeForSearch(r.category) === normCat &&
             normalizeForSearch(r.model || '') === normModel
@@ -198,7 +196,6 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
         // 4. Category + Model Match
         if (item.model) {
             r = scopeRules.find(r => 
-                !r.materialId &&
                 normalizeForSearch(r.category) === normCat && 
                 normalizeForSearch(r.model || '') === normModel
             );
@@ -207,7 +204,6 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
 
         // 5. Category Match (model: 'All')
         r = scopeRules.find(r => 
-            !r.materialId &&
             normalizeForSearch(r.category) === normCat && 
             (!r.model || r.model === 'All' || r.model === '')
         );
