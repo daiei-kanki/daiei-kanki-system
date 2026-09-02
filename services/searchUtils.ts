@@ -6,6 +6,28 @@ const normalizationCache = new Map<string, string>();
 const strictNormalizationCache = new Map<string, string>();
 
 /**
+ * 日本時間(JST = UTC+9)の「YYYY-MM-DD」形式の日付文字列を取得します。
+ * toISOString().slice(0, 10) が深夜〜朝9時前(JST)に前日(UTC)になるバグを解消します。
+ */
+export const getTodayJSTString = (d: Date = new Date()): string => {
+    const formatter = new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    });
+    const parts = formatter.formatToParts(d);
+    const year = parts.find(p => p.type === 'year')?.value || '2026';
+    const month = parts.find(p => p.type === 'month')?.value || '01';
+    const day = parts.find(p => p.type === 'day')?.value || '01';
+    return `${year}-${month}-${day}`;
+};
+
+export const getTodayJSTMonthString = (d: Date = new Date()): string => {
+    return getTodayJSTString(d).slice(0, 7);
+};
+
+/**
  * Natural comparison function that handles numbers within strings correctly.
  * Useful for sorting sizes like 15, 20, 25, 100, etc.
  */
