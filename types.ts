@@ -114,6 +114,7 @@ export interface SlipItem extends Material {
 
 export type DeliveryTime = 'morning_first' | 'am' | 'afternoon_first' | 'pm' | 'none';
 export type DeliveryDestination = 'site' | 'factory' | 'office' | 'home' | 'bring' | 'carrier' | 'none';
+export type SlipType = 'outbound' | 'return' | 'provisional' | 'reslip' | 'cover' | 'estimate' | 'delivery' | 'invoice';
 
 export interface Slip {
   id: string;
