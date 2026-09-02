@@ -4,7 +4,7 @@ import { Estimate, EstimateStatus, Customer, MaterialItem, SlipItem, AppSettings
 import { X, Printer, Search, FileText, Trash2, CheckCircle2, XCircle, Clock, ChevronRight, Loader2, Calendar, User, MapPin, Edit3, Plus, Minus, Save, RotateCcw, Camera, Sparkles, ShoppingCart, Mail, GripVertical } from 'lucide-react';
 import * as storage from '../services/firebaseService';
 import { parseOrderMemo } from '../services/geminiService';
-import { normalizeForSearch, filterAndSortItems } from '../services/searchUtils';
+import { normalizeForSearch, filterAndSortItems, getTodayJSTString } from '../services/searchUtils';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 
 const DEFAULT_COMPANY_INFO: AppSettings = {
@@ -209,14 +209,26 @@ const EstimateItemRow = React.memo(({
           <td className="px-2 border-r relative">
             {isEditing ? (
               <div className="flex flex-col gap-0.5 relative">
-                <input
-                  type="text"
-                  value={item?.name || ''}
-                  onChange={e => { onUpdateItem(idx, { name: e.target.value }); setQuery(e.target.value); }}
-                  onFocus={e => { setSuggestionIdx(idx); setSuggestionType('name'); setQuery(e.target.value); }}
-                  className="w-full text-[10px] px-1 py-0.5 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold"
-                  placeholder="品名"
-                />
+                <div className="flex items-center gap-1">
+                  <select
+                    value={item?.itemKind || '材料'}
+                    onChange={e => onUpdateItem(idx, { itemKind: e.target.value as any })}
+                    className="text-[8px] border rounded bg-slate-50 font-bold text-slate-700 py-0.5 px-1 outline-none shrink-0"
+                  >
+                    <option value="材料">材料</option>
+                    <option value="工事費">工事費</option>
+                    <option value="外注費">外注費</option>
+                    <option value="その他">その他</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={item?.name || ''}
+                    onChange={e => { onUpdateItem(idx, { name: e.target.value }); setQuery(e.target.value); }}
+                    onFocus={e => { setSuggestionIdx(idx); setSuggestionType('name'); setQuery(e.target.value); }}
+                    className="w-full text-[10px] px-1 py-0.5 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold"
+                    placeholder="品名"
+                  />
+                </div>
                 {item?.manufacturer && <span className="text-[8px] text-slate-500 truncate">{item.manufacturer}</span>}
                 {suggestionIdx === idx && suggestionType === 'name' && suggestions.length > 0 && (
                   <div className="absolute top-full left-0 z-50 bg-white border-2 border-blue-300 rounded-lg shadow-2xl w-96 max-h-64 overflow-auto">
@@ -231,7 +243,14 @@ const EstimateItemRow = React.memo(({
               </div>
             ) : (
               <div className="flex flex-col">
-                <span className="font-bold truncate text-[10px]">{item?.name}</span>
+                <div className="flex items-center gap-1">
+                  {item?.itemKind && (
+                    <span className="text-[7px] bg-slate-100 text-slate-600 font-bold px-1 rounded border border-slate-200 print:hidden">
+                      {item.itemKind}
+                    </span>
+                  )}
+                  <span className="font-bold truncate text-[10px]">{item?.name}</span>
+                </div>
                 {item?.manufacturer && <span className="text-[8px] text-slate-500 truncate">{item.manufacturer}</span>}
               </div>
             )}
@@ -278,7 +297,13 @@ const EstimateItemRow = React.memo(({
           </td>
           <td className="px-2 text-right border-r">
             {isEditing ? (
-              <input type="number" value={item?.listPrice || ''} onChange={e => onUpdateItem(idx, { listPrice: parseFloat(e.target.value) || 0 })} className="w-full text-right px-1 py-0.5 border rounded font-mono text-slate-400" placeholder="0" />
+              <div className="flex flex-col gap-0.5">
+                <input type="number" value={item?.listPrice || ''} onChange={e => onUpdateItem(idx, { listPrice: parseFloat(e.target.value) || 0 })} className="w-full text-right px-1 py-0.5 border rounded font-mono text-slate-400" placeholder="定価" />
+                <div className="flex items-center justify-end text-[7px] text-slate-400 gap-0.5 no-print">
+                  <span>原価:</span>
+                  <input type="number" value={item?.costPrice || ''} onChange={e => onUpdateItem(idx, { costPrice: parseFloat(e.target.value) || 0 })} className="w-12 text-right px-0.5 py-0 border rounded font-mono text-slate-600 bg-amber-50/50" placeholder="0" />
+                </div>
+              </div>
             ) : (
               <span className="font-mono text-slate-400">{item && item.listPrice > 0 ? `¥${item.listPrice.toLocaleString()}` : ''}</span>
             )}
@@ -700,12 +725,12 @@ export const EstimateManager: React.FC<EstimateManagerProps> = ({ onClose, onCon
   }, [selectedEstimate, recalculate, padItems]);
 
   const handleNewEstimate = async () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const valid = new Date(); valid.setDate(valid.getDate() + 30);
+    const today = new Date();
+    const valid = new Date(); valid.setDate(today.getDate() + 30);
     const newEst: Omit<Estimate, 'id'> = {
       createdAt: Date.now(),
-      date: today,
-      validUntil: valid.toISOString().slice(0, 10),
+      date: getTodayJSTString(today),
+      validUntil: getTodayJSTString(valid),
       customerName: '新規顧客',
       constructionName: '',
       items: padItems([]),
