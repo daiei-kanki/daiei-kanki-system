@@ -17,9 +17,10 @@ import { SettingsManager } from './components/SettingsManager';
 import { AITakahashi } from './components/AITakahashi';
 import { LinkUserManagement } from './components/LinkUserManagement';
 import { generateMaterialsFromFile } from './services/geminiService';
+import { FEATURE_FLAGS, FEATURE_DISABLED_MESSAGES } from './config/featureFlags';
 import * as storage from './services/firebaseService';
 import { deduplicateMaterials } from './services/firebaseService';
-import { normalizeForSearch, filterAndSortItems, getAppliedPrice } from './services/searchUtils';
+import { normalizeForSearch, filterAndSortItems, getAppliedPrice, getTodayJSTString } from './services/searchUtils';
 import * as XLSX from 'xlsx';
 
 const App: React.FC = () => {
@@ -155,7 +156,7 @@ const App: React.FC = () => {
     // 改定予定日チェック：改定日になった資材を自動適用
     useEffect(() => {
         if (items.length === 0) return;
-        const today = new Date().toISOString().slice(0, 10);
+        const today = getTodayJSTString();
         const dueItems = items.filter(item =>
             item.scheduledPriceDate &&
             item.scheduledPriceDate <= today &&
@@ -378,56 +379,72 @@ const App: React.FC = () => {
             desc: '現場への出庫、返品の作成。出庫待ち・欠品伝票の管理を行います。',
             icon: ClipboardList,
             color: 'bg-blue-600',
-            action: () => { setSlipManagerInitialTab('create'); setSlipManagerOpen(true); }
+            action: () => { setSlipManagerInitialTab('create'); setSlipManagerOpen(true); },
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: '伝票・請求履歴',
             desc: '確定した納品書・返品伝票の閲覧、および請求書の一括発行を行います。',
             icon: History,
             color: 'bg-emerald-600',
-            action: () => { setSlipManagerInitialTab('history'); setSlipManagerOpen(true); }
+            action: () => { setSlipManagerInitialTab('history'); setSlipManagerOpen(true); },
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: '見積書管理',
             desc: '新規見積の作成、履歴確認、伝票への変換を行います。',
             icon: FileText,
             color: 'bg-amber-500',
-            action: () => setIsEstimateManagerOpen(true)
+            action: () => setIsEstimateManagerOpen(true),
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: '資材クイック検索',
             desc: '在庫と価格の確認専用画面（編集不可）',
             icon: SearchCode,
             color: 'bg-indigo-600',
-            action: () => setIsQuickSearchOpen(true)
+            action: () => setIsQuickSearchOpen(true),
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: '発注・入荷管理',
             desc: '仕入先への発注書作成と、入荷時の自動在庫更新を行います。',
             icon: ShoppingCart,
             color: 'bg-emerald-600',
-            action: () => setIsPOManagerOpen(true)
+            action: () => setIsPOManagerOpen(true),
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: '資材・単価管理',
             desc: 'マスター登録、AIインポート、顧客別単価を設定します。',
             icon: Database,
             color: 'bg-slate-900',
-            action: handleMasterAccess
+            action: handleMasterAccess,
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: '環境設定・口座設定',
             desc: '自社情報（名称、住所、T番号）および振込先口座の編集。これらは各種帳票に自動反映されます。',
             icon: Settings2,
             color: 'bg-slate-700',
-            action: () => setIsSettingsOpen(true)
+            action: () => setIsSettingsOpen(true),
+            disabled: false,
+            disabledReason: ''
         },
         {
             title: 'LINKユーザー管理',
             desc: 'COREXIA LINK (顧客用アプリ) の利用申請の承認・管理を行います。',
             icon: UserCheck,
             color: 'bg-rose-600',
-            action: () => setIsLinkUserManagementOpen(true)
+            action: () => setIsLinkUserManagementOpen(true),
+            disabled: !FEATURE_FLAGS.enableLINK,
+            disabledReason: FEATURE_DISABLED_MESSAGES.enableLINK
         }
     ];
 
@@ -543,7 +560,7 @@ const App: React.FC = () => {
                         <div className="flex gap-4">
                             <StatsCard title="在庫総額(原価)" value={`¥${items.reduce((s, i) => s + ((i.costPrice || 0) * (i.quantity || 0)), 0).toLocaleString()}`} icon={Database} color="rose" compact />
                             <StatsCard title="資材総数" value={items.length.toLocaleString()} icon={Package} color="blue" compact />
-                            <StatsCard title="本日の伝票" value={slips.filter(s => s.date === new Date().toISOString().slice(0, 10)).length.toString()} icon={TrendingUp} color="emerald" compact />
+                            <StatsCard title="本日の伝票" value={slips.filter(s => s.date === getTodayJSTString()).length.toString()} icon={TrendingUp} color="emerald" compact />
                         </div>
                     </div>
 
@@ -551,17 +568,35 @@ const App: React.FC = () => {
                         {dashboardActions.map((item, idx) => (
                             <button
                                 key={idx}
-                                onClick={item.action}
-                                className="group relative bg-white p-8 rounded-[2.5rem] shadow-sm hover:shadow-2xl hover:-translate-y-2 transition-all duration-300 text-left border border-slate-100 overflow-hidden"
+                                onClick={item.disabled ? undefined : item.action}
+                                disabled={item.disabled}
+                                className={`group relative bg-white p-8 rounded-[2.5rem] shadow-sm text-left border border-slate-100 overflow-hidden transition-all duration-300 ${
+                                    item.disabled
+                                        ? 'cursor-not-allowed opacity-60 bg-slate-50'
+                                        : 'hover:shadow-2xl hover:-translate-y-2'
+                                }`}
                             >
-                                <div className={`w-14 h-14 ${item.color} text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                                <div className={`w-14 h-14 ${item.disabled ? 'bg-slate-400' : item.color} text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg ${!item.disabled ? 'group-hover:scale-110' : ''} transition-transform duration-300`}>
                                     <item.icon size={28} />
                                 </div>
-                                <h3 className="text-xl font-black text-slate-900 mb-2">{item.title}</h3>
-                                <p className="text-xs text-slate-400 font-bold leading-relaxed">{item.desc}</p>
-                                <div className="mt-6 flex items-center gap-2 text-blue-600 text-[10px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">
-                                    Open Action <ArrowRight size={14} />
+                                <div className="flex items-center gap-2 mb-2">
+                                    <h3 className="text-xl font-black text-slate-900">{item.title}</h3>
+                                    {item.disabled && (
+                                        <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2.5 py-0.5 rounded-full border border-amber-200">
+                                            準備中
+                                        </span>
+                                    )}
                                 </div>
+                                <p className="text-xs text-slate-400 font-bold leading-relaxed">{item.desc}</p>
+                                {item.disabled ? (
+                                    <div className="mt-4 text-amber-600 text-[10px] font-bold bg-amber-50 p-2.5 rounded-xl border border-amber-200/60">
+                                        ※ {item.disabledReason}
+                                    </div>
+                                ) : (
+                                    <div className="mt-6 flex items-center gap-2 text-blue-600 text-[10px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">
+                                        Open Action <ArrowRight size={14} />
+                                    </div>
+                                )}
                             </button>
                         ))}
                     </div>
@@ -616,7 +651,7 @@ const App: React.FC = () => {
                             const today = new Date();
                             const valid = new Date(); valid.setDate(today.getDate() + 30);
                             const newEst: Omit<Estimate, 'id'> = {
-                                createdAt: Date.now(), date: today.toISOString().slice(0, 10), validUntil: valid.toISOString().slice(0, 10),
+                                createdAt: Date.now(), date: getTodayJSTString(today), validUntil: getTodayJSTString(valid),
                                 customerName: activeCustomer || '（要確認）', constructionName: activeSite || '', 
                                 items: aiItems.map(i => {
                                     const master = items.find(mi => mi.id === i.id);
