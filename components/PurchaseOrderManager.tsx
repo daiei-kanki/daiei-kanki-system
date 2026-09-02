@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ShoppingCart, Plus, X, Search, FileText, Printer, Trash2, Edit3, Save, CheckCircle2, Package, AlertTriangle } from 'lucide-react';
 import { PurchaseOrder, MaterialItem, AppSettings, PurchaseOrderItem } from '../types';
 import * as storage from '../services/firebaseService';
-import { normalizeForSearch, filterAndSortItems } from '../services/searchUtils';
+import { normalizeForSearch, filterAndSortItems, getTodayJSTString } from '../services/searchUtils';
 
 interface PurchaseOrderManagerProps {
     masterItems: MaterialItem[];
@@ -19,6 +19,14 @@ export const PurchaseOrderManager: React.FC<PurchaseOrderManagerProps> = ({ mast
     const [previewScale, setPreviewScale] = useState(0.9);
     const [reslips, setReslips] = useState<any[]>([]);
     const [showReslipImport, setShowReslipImport] = useState(false);
+    const [panelSearchQuery, setPanelSearchQuery] = useState('');
+
+    const filteredPanelItems = useMemo(() => {
+        if (!panelSearchQuery.trim()) {
+            return masterItems.slice(0, 24);
+        }
+        return filterAndSortItems(masterItems, panelSearchQuery).slice(0, 100);
+    }, [masterItems, panelSearchQuery]);
 
     // Suggestions state
     const [suggestionIdx, setSuggestionIdx] = useState<number | null>(null);
@@ -71,13 +79,13 @@ export const PurchaseOrderManager: React.FC<PurchaseOrderManagerProps> = ({ mast
         const newOrder: Omit<PurchaseOrder, 'id'> = {
             supplierName: '新規仕入先',
             status: 'draft',
-            orderDate: new Date().toISOString().slice(0, 10),
+            orderDate: getTodayJSTString(),
             items: [],
             totalAmount: 0,
             taxAmount: 0,
             grandTotal: 0,
             createdAt: Date.now(),
-            date: new Date().toISOString().slice(0, 10),
+            date: getTodayJSTString(),
             customerName: '自社在庫',
             deliveryTime: 'none',
             deliveryDestination: 'none'
@@ -464,32 +472,64 @@ export const PurchaseOrderManager: React.FC<PurchaseOrderManagerProps> = ({ mast
                                     </div>
                                 </div>
 
-                                {/* Helpers (Visible only in edit mode) */}
                                 {isEditing && (
                                     <div className="w-full max-w-[210mm] mt-4 space-y-4 no-print">
                                         <div className="bg-white p-6 rounded-3xl shadow-xl border border-slate-200">
-                                            <div className="flex items-center justify-between mb-4">
-                                                <h3 className="text-sm font-black flex items-center gap-2"><Package size={16} /> 資材を追加</h3>
+                                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                                                <div className="flex items-center gap-2">
+                                                    <h3 className="text-sm font-black flex items-center gap-2"><Package size={16} /> 資材をクイック追加</h3>
+                                                    <span className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded-full">
+                                                        {filteredPanelItems.length}件表示
+                                                    </span>
+                                                </div>
                                                 <button
                                                     onClick={() => setShowReslipImport(true)}
-                                                    className="flex items-center gap-2 bg-rose-500 text-white px-4 py-2 rounded-xl text-[10px] font-black hover:bg-rose-600 transition-all shadow-md active:scale-95"
+                                                    className="flex items-center gap-2 bg-rose-500 text-white px-4 py-2 rounded-xl text-[10px] font-black hover:bg-rose-600 transition-all shadow-md active:scale-95 shrink-0"
                                                 >
                                                     <AlertTriangle size={14} /> 欠品・未納リストから引用 ({reslips.length})
                                                 </button>
                                             </div>
-                                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                                                {masterItems.slice(0, 12).map(mi => (
+
+                                            {/* パネル内リアルタイム検索バー */}
+                                            <div className="relative mb-4">
+                                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                                <input
+                                                    type="text"
+                                                    value={panelSearchQuery}
+                                                    onChange={e => setPanelSearchQuery(e.target.value)}
+                                                    placeholder="品名・型式・メーカー名等で検索..."
+                                                    className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500 focus:bg-white transition-all"
+                                                />
+                                                {panelSearchQuery && (
                                                     <button
-                                                        key={mi.id}
-                                                        onClick={() => handleAddItem(mi)}
-                                                        className="text-left p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-emerald-500 hover:bg-white transition-all group"
+                                                        onClick={() => setPanelSearchQuery('')}
+                                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                                                     >
-                                                        <div className="font-bold text-[10px] truncate group-hover:text-emerald-600 tracking-tighter">{mi.name}</div>
-                                                        <div className="text-slate-400 text-[8px] font-mono truncate">{mi.model} / ¥{(mi.costPrice || 0).toLocaleString()}</div>
+                                                        <X size={14} />
                                                     </button>
-                                                ))}
+                                                )}
                                             </div>
-                                            <p className="mt-3 text-[9px] text-slate-400 font-bold text-center italic">※検索バー等のフル機能は資材マスター画面にてご利用ください</p>
+
+                                            <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
+                                                {filteredPanelItems.length === 0 ? (
+                                                    <div className="py-8 text-center text-slate-400 text-xs font-bold">
+                                                        該当する資材が見つかりません
+                                                    </div>
+                                                ) : (
+                                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                                                        {filteredPanelItems.map(mi => (
+                                                            <button
+                                                                key={mi.id}
+                                                                onClick={() => handleAddItem(mi)}
+                                                                className="text-left p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-emerald-500 hover:bg-white transition-all group"
+                                                            >
+                                                                <div className="font-bold text-[10px] truncate group-hover:text-emerald-600 tracking-tighter">{mi.name}</div>
+                                                                <div className="text-slate-400 text-[8px] font-mono truncate">{mi.model || mi.dimensions || '規格なし'} / ¥{(mi.costPrice || 0).toLocaleString()}</div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}
