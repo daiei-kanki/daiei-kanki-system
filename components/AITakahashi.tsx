@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, X, Send, User, Bot, Loader2, Sparkles, ShoppingCart, MapPin, Building2, ExternalLink, Globe, FileText, CheckCircle, PackageCheck, FileSpreadsheet, RotateCcw, Trash2, ChevronRight, Check, AlertCircle, Camera, Image as ImageIcon } from 'lucide-react';
 import { MaterialItem, SlipItem } from '../types';
+import { FEATURE_FLAGS, FEATURE_DISABLED_MESSAGES } from '../config/featureFlags';
 import * as gemini from '../services/geminiService';
 import * as XLSX from 'xlsx';
 
@@ -475,14 +476,32 @@ export const AITakahashi: React.FC<AITakahashiProps> = ({ masterItems, onAddToCa
         </div>
       )}
 
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        className={`w-12 h-12 sm:w-16 sm:h-16 rounded-2xl sm:rounded-[2rem] flex items-center justify-center shadow-2xl transition-all hover:scale-105 active:scale-95 ${isOpen ? 'bg-slate-900 text-white' : 'bg-blue-600 text-white ring-4 ring-blue-100'}`}
-      >
-        {isOpen ? <X size={20} /> : <MessageSquare size={20} />}
-      </button>
+      <div className="relative group">
+        <button
+          onClick={() => {
+            if (!FEATURE_FLAGS.enableAITakahashi) return;
+            setIsOpen(!isOpen);
+          }}
+          disabled={!FEATURE_FLAGS.enableAITakahashi}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          className={`w-12 h-12 sm:w-16 sm:h-16 rounded-2xl sm:rounded-[2rem] flex items-center justify-center shadow-2xl transition-all ${
+            !FEATURE_FLAGS.enableAITakahashi
+              ? 'bg-slate-400 text-slate-200 cursor-not-allowed opacity-70'
+              : isOpen
+              ? 'bg-slate-900 text-white hover:scale-105 active:scale-95'
+              : 'bg-blue-600 text-white ring-4 ring-blue-100 hover:scale-105 active:scale-95'
+          }`}
+          title={!FEATURE_FLAGS.enableAITakahashi ? FEATURE_DISABLED_MESSAGES.enableAITakahashi : undefined}
+        >
+          {isOpen ? <X size={20} /> : <MessageSquare size={20} />}
+        </button>
+        {!FEATURE_FLAGS.enableAITakahashi && (
+          <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block bg-amber-900 text-white text-[10px] font-bold py-1.5 px-3 rounded-xl shadow-xl whitespace-nowrap z-50">
+            ※ {FEATURE_DISABLED_MESSAGES.enableAITakahashi}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
