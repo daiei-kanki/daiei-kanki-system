@@ -1378,7 +1378,7 @@ export const SlipManager: React.FC<{
     };
 
     const handleConfirmDelivery = async () => {
-        if (!confirmingOutbound) return;
+        if (!confirmingOutbound || isSaving) return;
         if (!issuerName.trim()) {
             alert('出庫担当者の名前を入力してください。');
             return;
@@ -1446,37 +1446,52 @@ export const SlipManager: React.FC<{
                 isHandled: true
             };
 
-            await storage.addSlip(cleanForFirestore(provSlip));
+            // 二重発生防止: 同一伝票番号の仮納品書が既に存在する場合は新規作成(addSlip)ではなく安全に更新(updateSlip)
+            const existingProv = slips.find(s => s.type === 'provisional' && s.slipNumber === confirmingOutbound.slipNumber);
+            if (existingProv && existingProv.id) {
+                await storage.updateSlip(existingProv.id, cleanForFirestore(provSlip));
+            } else {
+                await storage.addSlip(cleanForFirestore(provSlip));
+            }
+
             if (confirmingOutbound.id) await storage.updateSlip(confirmingOutbound.id, { isClosed: true, isHandled: true });
 
             if (missingItems.length > 0) {
+                const rsSlipNo = `${confirmingOutbound.slipNumber}-RES`;
+                const existingReslip = slips.find(s => s.type === 'reslip' && s.slipNumber === rsSlipNo);
+
                 const rs: Slip = {
                     ...cleanForFirestore(confirmingOutbound),
-                    id: generateId(),
+                    id: existingReslip?.id || generateId(),
                     type: 'reslip',
                     items: missingItems,
                     totalAmount: 0,
                     taxAmount: 0,
                     grandTotal: 0,
-                    slipNumber: `${confirmingOutbound.slipNumber}-RES`,
+                    slipNumber: rsSlipNo,
                     createdAt: Date.now() + 50,
                     note: (confirmingOutbound.note || '') + ' [欠品分再伝票]',
                     isClosed: false
                 };
-                await storage.addSlip(cleanForFirestore(rs));
+
+                if (existingReslip && existingReslip.id) {
+                    await storage.updateSlip(existingReslip.id, cleanForFirestore(rs));
+                } else {
+                    await storage.addSlip(cleanForFirestore(rs));
+                }
 
                 setConfirmingOutbound(null);
                 setIssuerName('');
                 handleTabChange('reslip');
                 setPrintingSlips([
-                    ...splitSlipIntoPages({ ...provSlip, id: generateId() } as Slip),
+                    ...splitSlipIntoPages({ ...provSlip, id: existingProv?.id || generateId() } as Slip),
                     ...splitSlipIntoPages(rs)
                 ]);
             } else {
                 setConfirmingOutbound(null);
                 setIssuerName('');
                 handleTabChange('pending');
-                setPrintingSlips(splitSlipIntoPages({ ...provSlip, id: generateId() } as Slip));
+                setPrintingSlips(splitSlipIntoPages({ ...provSlip, id: existingProv?.id || generateId() } as Slip));
             }
         } finally { setIsSaving(false); }
     };
@@ -1869,8 +1884,11 @@ export const SlipManager: React.FC<{
                                 />
                             </div>
                             <div className="flex justify-end gap-3">
-                                <button onClick={() => { setConfirmingOutbound(null); setIssuerName(''); }} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-lg">キャンセル</button>
-                                <button onClick={handleConfirmDelivery} disabled={!issuerName.trim()} className="bg-blue-600 text-white px-8 py-2.5 rounded-xl font-bold shadow-lg active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed">数量を確定して仮納品書発行</button>
+                                <button onClick={() => { setConfirmingOutbound(null); setIssuerName(''); }} disabled={isSaving} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-lg disabled:opacity-40">キャンセル</button>
+                                <button onClick={handleConfirmDelivery} disabled={isSaving || !issuerName.trim()} className="bg-blue-600 text-white px-8 py-2.5 rounded-xl font-bold shadow-lg active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
+                                    {isSaving && <Loader2 className="animate-spin" size={18} />}
+                                    {isSaving ? '処理中...' : '数量を確定して仮納品書発行'}
+                                </button>
                             </div>
                         </div>
                     </div>
