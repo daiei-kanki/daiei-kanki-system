@@ -1086,7 +1086,7 @@ export const SlipManager: React.FC<{
 
         slips.forEach(s => {
             const isCustMatch = s.customerName === customerName || normalizeForSearch(s.customerName || '') === normalizedCustomer;
-            const isSiteMatch = !normalizedSiteName || normalizeForSearch(s.constructionName || '').includes(normalizedSiteName);
+            const isSiteMatch = !normalizedSiteName || normalizeForSearch(s.constructionName || '') === normalizedSiteName;
 
             if (isCustMatch && isSiteMatch && s.id !== editingSlipId) {
                 const month = s.date.slice(0, 7);
@@ -1102,7 +1102,7 @@ export const SlipManager: React.FC<{
                             });
                         }
                         const entry = historyMap.get(key)!;
-                        entry.totalDelivered += (item.deliveredQuantity || item.quantity || 0);
+                        entry.totalDelivered += (item.deliveredQuantity !== undefined ? item.deliveredQuantity : (item.quantity || 0));
                     });
                 } else {
                     s.items.forEach(item => {
