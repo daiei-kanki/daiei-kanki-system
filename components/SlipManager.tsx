@@ -463,7 +463,7 @@ const SlipPage: React.FC<{
                                     {isDetail && (
                                         <td className="text-center border-r font-mono text-[9px] py-0.5">
                                             <div className="text-[8px] text-slate-500 leading-none">{item?.orderDate?.slice(5).replace('-', '/') || ''}</div>
-                                            <div className="font-bold leading-none mt-1">{((isReturn ? (slip.date || item?.date) : item?.date) || '').slice(5).replace('-', '/')}</div>
+                                            <div className="font-bold leading-none mt-1">{((isReturn ? (slip.date || item?.date) : (item?.date || slip.date)) || '').slice(5).replace('-', '/')}</div>
                                         </td>
                                     )}
                                     <td className="px-2 border-r truncate font-bold">
@@ -1274,13 +1274,27 @@ export const SlipManager: React.FC<{
             return alert(`⚠️ 請求発行ガード（No.12）: 以下の明細に仕入値（原価）が設定されていません。仕入値を入力してください。\n対象: ${names}`);
         }
         try {
+            const targetSlip = editingSlipId ? slips.find(sl => sl.id === editingSlipId) : null;
+            const prevSlipDate = targetSlip?.date;
+            const isProvEdit = editingSlipId && archivedSlips.find(s => s.id === editingSlipId)?.type === 'provisional';
+
             const processedItems = cart.map((i: SlipItem) => {
                 const qty = i.quantity;
                 const realId = i.id.includes('__') ? i.id.split('__')[0] : i.id;
                 // 仮納品書の修正時、元のdeliveredQuantityを保持する（未設定時はqtyを使用）
-                const isProvEdit = editingSlipId && archivedSlips.find(s => s.id === editingSlipId)?.type === 'provisional';
                 const finalDeliveredQty = isProvEdit ? (i.deliveredQuantity ?? qty) : qty;
-                return { ...i, id: realId, quantity: qty, deliveredQuantity: finalDeliveredQty, date: activeMode === 'return' ? slipDate : (i.date || slipDate), orderDate: i.orderDate || orderDate };
+                
+                // 納品日: 返品モードは slipDate。仮納品書修正時、前回の伝票日付と同じだった明細は新しい slipDate に追従
+                let finalItemDate = slipDate;
+                if (activeMode === 'return') {
+                    finalItemDate = slipDate;
+                } else if (isProvEdit) {
+                    finalItemDate = (i.date && prevSlipDate && i.date !== prevSlipDate) ? i.date : slipDate;
+                } else {
+                    finalItemDate = i.date || slipDate;
+                }
+
+                return { ...i, id: realId, quantity: qty, deliveredQuantity: finalDeliveredQty, date: finalItemDate, orderDate: i.orderDate || orderDate };
             });
 
             if (activeMode === 'return') {
@@ -1448,10 +1462,11 @@ export const SlipManager: React.FC<{
 
             // 二重発生防止: 同一伝票番号の仮納品書が既に存在する場合は新規作成(addSlip)ではなく安全に更新(updateSlip)
             const existingProv = slips.find(s => s.type === 'provisional' && s.slipNumber === confirmingOutbound.slipNumber);
+            let provId = existingProv?.id;
             if (existingProv && existingProv.id) {
                 await storage.updateSlip(existingProv.id, cleanForFirestore(provSlip));
             } else {
-                await storage.addSlip(cleanForFirestore(provSlip));
+                provId = await storage.addSlip(cleanForFirestore(provSlip));
             }
 
             if (confirmingOutbound.id) await storage.updateSlip(confirmingOutbound.id, { isClosed: true, isHandled: true });
@@ -1474,24 +1489,25 @@ export const SlipManager: React.FC<{
                     isClosed: false
                 };
 
+                let reslipId = existingReslip?.id;
                 if (existingReslip && existingReslip.id) {
                     await storage.updateSlip(existingReslip.id, cleanForFirestore(rs));
                 } else {
-                    await storage.addSlip(cleanForFirestore(rs));
+                    reslipId = await storage.addSlip(cleanForFirestore(rs));
                 }
 
                 setConfirmingOutbound(null);
                 setIssuerName('');
                 handleTabChange('reslip');
                 setPrintingSlips([
-                    ...splitSlipIntoPages({ ...provSlip, id: existingProv?.id || generateId() } as Slip),
-                    ...splitSlipIntoPages(rs)
+                    ...splitSlipIntoPages({ ...provSlip, id: provId || generateId() } as Slip),
+                    ...splitSlipIntoPages({ ...rs, id: reslipId || generateId() } as Slip)
                 ]);
             } else {
                 setConfirmingOutbound(null);
                 setIssuerName('');
                 handleTabChange('pending');
-                setPrintingSlips(splitSlipIntoPages({ ...provSlip, id: existingProv?.id || generateId() } as Slip));
+                setPrintingSlips(splitSlipIntoPages({ ...provSlip, id: provId || generateId() } as Slip));
             }
         } finally { setIsSaving(false); }
     };
@@ -1544,7 +1560,7 @@ export const SlipManager: React.FC<{
                 // 寸法や型式の僅かな違い（スペースの有無など）で合算されないよう正規化
                 const safeDim = (i.dimensions || '').replace(/\s+/g, '').trim();
                 const safeModel = (i.model || '').replace(/\s+/g, '').trim();
-                const actualDate = i.date || s.date;
+                const actualDate = (s.type === 'provisional' ? (s.date || i.date) : (i.date || s.date));
                 const actualOrderDate = i.orderDate || s.orderDate || '';
                 const itemKey = `${actualDate}_${actualOrderDate}_${s.slipNumber || 'UNK'}_${isReturning ? 'RET' : 'SALE'}_${i.name}_${i.manufacturer || ''}_${safeModel}_${safeDim}_${price}`;
 
@@ -1609,16 +1625,19 @@ export const SlipManager: React.FC<{
                 if (dateCmp !== 0) return dateCmp;
                 return a[0].localeCompare(b[0]);
             }).forEach(([sourceSlipNo, dItems]) => {
-                const date = dItems[0]?.date || 'unknown';
                 const orderDate = dItems[0]?.orderDate || '';
                 const dNet = dItems.reduce((acc, b) => acc + ((b.appliedPrice || 0) * (b.deliveredQuantity || 0)), 0);
                 const dTax = Math.round(dNet * 0.1);
                 
-                // 元伝票の決定: 同一 slipNumber の中で注文番号(customerOrderNumber)が存在する伝票を最優先で検索
-                const originalSlip = slips.find(s => s.slipNumber === sourceSlipNo && s.customerOrderNumber && s.customerOrderNumber.trim() !== '')
-                    || slips.find(s => s.slipNumber === sourceSlipNo)
-                    || allSlipsForCustomer.find(s => s.slipNumber === sourceSlipNo)
-                    || validSlips.find(s => s.slipNumber === sourceSlipNo);
+                // 元伝票の決定: 対象月の確定伝票(validSlips)の中から provisional を最優先で検索
+                const originalSlip = validSlips.find(s => s.slipNumber === sourceSlipNo && s.type === 'provisional')
+                    || allSlipsForCustomer.find(s => s.slipNumber === sourceSlipNo && s.type === 'provisional')
+                    || slips.find(s => s.slipNumber === sourceSlipNo && s.type === 'provisional')
+                    || validSlips.find(s => s.slipNumber === sourceSlipNo && s.type === 'return')
+                    || slips.find(s => s.slipNumber === sourceSlipNo && s.customerOrderNumber && s.customerOrderNumber.trim() !== '')
+                    || slips.find(s => s.slipNumber === sourceSlipNo);
+
+                const date = originalSlip?.date || dItems[0]?.date || 'unknown';
 
                 // 納品書のみに直接入力された個別の注文番号を適用（現場名からの英数字切り出しは一切行わない）
                 const deliveryOrderNo = (originalSlip?.customerOrderNumber && originalSlip.customerOrderNumber.trim() !== '') 
@@ -1640,10 +1659,15 @@ export const SlipManager: React.FC<{
                         date: date,
                         orderDate: orderDate || originalSlip?.orderDate || '',
                         slipNumber: `DLV-${sourceSlipNo}${i > 0 ? `-${i/16 + 1}` : ''}`,
+                        deliveryDestination: originalSlip?.deliveryDestination || 'none',
+                        deliveryTime: originalSlip?.deliveryTime || 'none',
+                        note: originalSlip?.note || '',
                         orderingPerson: originalSlip?.orderingPerson,
                         customerOrderNumber: deliveryOrderNo,
                         receivingPerson: originalSlip?.receivingPerson,
-                        issuerPerson: originalSlip?.issuerPerson
+                        issuerPerson: originalSlip?.issuerPerson,
+                        deliveryPerson: originalSlip?.deliveryPerson,
+                        receiverPerson: originalSlip?.receiverPerson
                     });
                 }
             });
