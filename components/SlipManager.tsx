@@ -415,7 +415,7 @@ const SlipPage: React.FC<{
                             <p>【配送先】 {DestLabels[slip.deliveryDestination]} / {DeliveryTimeLabels[slip.deliveryTime]}</p>
                             <div className="flex gap-4">
                                 <p>【発注者】 {slip.orderingPerson || '未指定'} 様</p>
-                                {isDelivery && slip.customerOrderNumber && <p>【注文番号】 {slip.customerOrderNumber}</p>}
+                                {slip.customerOrderNumber && <p>【注文番号】 {slip.customerOrderNumber}</p>}
                             </div>
                         </div>
                     </div>
