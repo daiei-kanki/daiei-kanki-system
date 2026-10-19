@@ -396,14 +396,29 @@ const SlipPage: React.FC<{
                     <h1 className={`text-2xl font-serif font-bold tracking-widest ${(isReturn && !isInvoice) ? 'text-red-700' : ''}`}>{getSlipLabel(slip.type, slip.constructionName)}</h1>
                     <div className="text-right font-mono text-xs">
                         <p className="font-bold">No. {slip.slipNumber || 'PENDING'}</p>
-                        <div className="flex items-center justify-end gap-1">
-                            <input 
-                                type="date" 
-                                value={slip.date || ''} 
-                                onChange={(e) => onUpdateSlip?.({ date: e.target.value })}
-                                className="bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-400 rounded p-0.5 text-right w-24 print:hidden cursor-pointer hover:bg-slate-50"
-                            />
-                            <p className="hidden print:block">{slip.date}</p>
+                        <div className="text-[10px] text-slate-600 mt-1 flex flex-col items-end gap-0.5">
+                            {!isInvoice && (
+                                <div className="flex items-center justify-end gap-1">
+                                    <span className="font-sans font-bold text-slate-500">受注日:</span>
+                                    <input 
+                                        type="date" 
+                                        value={slip.orderDate || slip.date || ''} 
+                                        onChange={(e) => onUpdateSlip?.({ orderDate: e.target.value })}
+                                        className="bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-400 rounded p-0.5 text-right w-24 print:hidden cursor-pointer hover:bg-slate-50 font-mono font-bold"
+                                    />
+                                    <span className="hidden print:inline font-mono font-bold">{slip.orderDate || slip.date || ''}</span>
+                                </div>
+                            )}
+                            <div className="flex items-center justify-end gap-1">
+                                <span className="font-sans font-bold text-slate-500">{isWorkSlip ? '出庫日:' : (isReturn ? '返品日:' : (isInvoice ? '発行日:' : '納品日:'))}</span>
+                                <input 
+                                    type="date" 
+                                    value={slip.date || ''} 
+                                    onChange={(e) => onUpdateSlip?.({ date: e.target.value })}
+                                    className="bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-400 rounded p-0.5 text-right w-24 print:hidden cursor-pointer hover:bg-slate-50 font-mono font-bold"
+                                />
+                                <span className="hidden print:inline font-mono font-bold">{slip.date || ''}</span>
+                            </div>
                         </div>
                     </div>
                 </div>
