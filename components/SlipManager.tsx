@@ -279,6 +279,7 @@ const SlipPage: React.FC<{
                                                     inputMode="numeric"
                                                     disabled={!FEATURE_FLAGS.enableCarryOverPayment}
                                                     value={prevAmt.toLocaleString()}
+                                                    onFocus={(e) => e.target.select()}
                                                     onChange={(e) => {
                                                         const val = e.target.value.replace(/,/g, '');
                                                         if (/^\d*$/.test(val)) {
@@ -286,7 +287,7 @@ const SlipPage: React.FC<{
                                                         }
                                                     }}
                                                     className={`w-full text-center bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-400 rounded p-1 print:hidden font-mono font-bold ${!FEATURE_FLAGS.enableCarryOverPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                                    title={!FEATURE_FLAGS.enableCarryOverPayment ? FEATURE_DISABLED_MESSAGES.enableCarryOverPayment : undefined}
+                                                    title={!FEATURE_FLAGS.enableCarryOverPayment ? FEATURE_DISABLED_MESSAGES.enableCarryOverPayment : "クリックして前回請求額を変更"}
                                                 />
                                                 <span className="hidden print:block">¥{prevAmt.toLocaleString()}</span>
                                             </td>
@@ -296,6 +297,7 @@ const SlipPage: React.FC<{
                                                     inputMode="numeric"
                                                     disabled={!FEATURE_FLAGS.enableCarryOverPayment}
                                                     value={payRec.toLocaleString()}
+                                                    onFocus={(e) => e.target.select()}
                                                     onChange={(e) => {
                                                         const val = e.target.value.replace(/,/g, '');
                                                         if (/^\d*$/.test(val)) {
@@ -303,7 +305,7 @@ const SlipPage: React.FC<{
                                                         }
                                                     }}
                                                     className={`w-full text-center bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-400 rounded p-1 print:hidden font-mono font-bold ${!FEATURE_FLAGS.enableCarryOverPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                                    title={!FEATURE_FLAGS.enableCarryOverPayment ? FEATURE_DISABLED_MESSAGES.enableCarryOverPayment : undefined}
+                                                    title={!FEATURE_FLAGS.enableCarryOverPayment ? FEATURE_DISABLED_MESSAGES.enableCarryOverPayment : "クリックして今回入金額を変更"}
                                                 />
                                                 <span className="hidden print:block">¥{payRec.toLocaleString()}</span>
                                             </td>
@@ -1011,6 +1013,7 @@ export const SlipManager: React.FC<{
     const { pendingOutbounds, archivedSlips, reslips } = useMemo(() => {
         const pending: Slip[] = []; const archived: Slip[] = []; const res: Slip[] = [];
         slips.forEach((s: Slip) => {
+            if (s.type === 'cover') return; // 請求書総括表は現場一覧・売上合計に混ざらないよう除外
             if (s.type === 'reslip') res.push(s);
             else if (s.type === 'outbound') { if (!s.isClosed) pending.push(s); }
             else archived.push(s);
@@ -1527,7 +1530,7 @@ export const SlipManager: React.FC<{
         } finally { setIsSaving(false); }
     };
 
-    const handleInvoiceIssuance = (cName: string, targetSite: string | null, allSlipsForCustomer: Slip[]) => {
+    const handleInvoiceIssuance = async (cName: string, targetSite: string | null, allSlipsForCustomer: Slip[]) => {
         const closingDay = customers.find(c => c.name === cName)?.closingDay || 99;
         const [y, m] = targetMonth.split('-').map(Number);
         
@@ -1607,12 +1610,83 @@ export const SlipManager: React.FC<{
         const totalTax = Math.round(totalNet * 0.1);
 
         if (!targetSite) {
+            const invSlipNumber = `INV-${targetMonth.replace('-', '')}`;
+            const existingCover = slips.find(s => 
+                s.type === 'cover' && 
+                s.customerName === cName && 
+                s.constructionName === '全現場一括集計' &&
+                s.slipNumber === invSlipNumber
+            );
+
+            let prevBilling = 0;
+            let payRec = 0;
+
+            if (existingCover) {
+                prevBilling = existingCover.previousBillingAmount || 0;
+                payRec = existingCover.paymentReceived || 0;
+            } else {
+                // 初回発行時: 前月の請求書があればそのgrandTotalを前回請求額に自動設定
+                const [ty, tm] = targetMonth.split('-').map(Number);
+                const [py, pm] = tm === 1 ? [ty - 1, 12] : [ty, tm - 1];
+                const prevTargetMonth = `${py}-${String(pm).padStart(2, '0')}`;
+                const prevInvSlipNumber = `INV-${prevTargetMonth.replace('-', '')}`;
+                const prevMonthCover = slips.find(s => 
+                    s.type === 'cover' && 
+                    s.customerName === cName && 
+                    s.constructionName === '全現場一括集計' && 
+                    s.slipNumber === prevInvSlipNumber
+                );
+                if (prevMonthCover) {
+                    prevBilling = prevMonthCover.grandTotal || 0;
+                }
+            }
+
+            const carriedFwd = prevBilling - payRec;
+            const currentGrandTotal = carriedFwd + totalNet + totalTax;
+
+            const coverData: Omit<Slip, 'id'> = {
+                customerName: cName,
+                constructionName: '全現場一括集計',
+                items: [],
+                totalAmount: totalNet,
+                taxAmount: totalTax,
+                grandTotal: currentGrandTotal,
+                date: end,
+                orderDate: start,
+                type: 'cover',
+                createdAt: existingCover?.createdAt || Date.now(),
+                siteSummaries: siteEntries.map(([name, total]) => ({ name, total })),
+                deliveryTime: 'none',
+                deliveryDestination: 'none',
+                slipNumber: invSlipNumber,
+                isClosed: true,
+                previousBillingAmount: prevBilling,
+                paymentReceived: payRec,
+                carriedForwardAmount: carriedFwd
+            };
+
+            let coverDocId = existingCover?.id;
+            if (coverDocId) {
+                storage.updateSlip(coverDocId, {
+                    totalAmount: totalNet,
+                    taxAmount: totalTax,
+                    grandTotal: currentGrandTotal,
+                    date: end,
+                    orderDate: start,
+                    siteSummaries: siteEntries.map(([name, total]) => ({ name, total }))
+                }).catch(console.error);
+            } else {
+                try {
+                    coverDocId = await storage.addSlip(coverData);
+                } catch (err) {
+                    console.error('Failed to create cover slip in Firestore:', err);
+                    coverDocId = 'cover-' + Date.now();
+                }
+            }
+
             allDocs.push({
-                id: 'cover-' + Date.now(), customerName: cName, constructionName: '全現場一括集計', items: [], totalAmount: totalNet,
-                taxAmount: totalTax, grandTotal: totalNet + totalTax, date: end, orderDate: start, type: 'cover',
-                createdAt: Date.now(), siteSummaries: siteEntries.map(([name, total]) => ({ name, total })), deliveryTime: 'none', deliveryDestination: 'none',
-                slipNumber: `INV-${targetMonth.replace('-', '')}`, isClosed: true,
-                previousBillingAmount: 0, paymentReceived: 0, carriedForwardAmount: 0
+                ...coverData,
+                id: coverDocId
             } as Slip);
         }
 
@@ -2017,11 +2091,46 @@ export const SlipManager: React.FC<{
                                                 forceDisplayPrice={forceDisplayPrice}
                                                 settings={settings}
                                                 pricingRules={pricingRules}
-                                                onUpdateSlip={(updates) => {
-                                                    setPrintingSlips(prev => prev.map((s, i) => i === idx ? { ...s, ...updates } : s));
+                                                onUpdateSlip={async (updates) => {
+                                                    setPrintingSlips(prev => prev.map((s, i) => {
+                                                        if (i !== idx) return s;
+                                                        const next = { ...s, ...updates };
+                                                        if (s.type === 'cover') {
+                                                            const p = next.previousBillingAmount || 0;
+                                                            const r = next.paymentReceived || 0;
+                                                            const cf = p - r;
+                                                            const sales = next.totalAmount || 0;
+                                                            const tax = Math.round(sales * 0.1);
+                                                            next.carriedForwardAmount = cf;
+                                                            next.grandTotal = cf + sales + tax;
+                                                        }
+                                                        return next;
+                                                    }));
                                                     const baseId = slip.id ? slip.id.replace(/-pg\d+$/, '') : null;
-                                                    if (baseId && !baseId.startsWith('cover-') && baseId.length > 10) {
-                                                        storage.updateSlip(baseId, updates).catch(console.error);
+                                                    if (baseId && baseId.length > 5) {
+                                                        let dbUpdates = { ...updates };
+                                                        if (slip.type === 'cover') {
+                                                            const p = (updates.previousBillingAmount !== undefined) ? updates.previousBillingAmount : (slip.previousBillingAmount || 0);
+                                                            const r = (updates.paymentReceived !== undefined) ? updates.paymentReceived : (slip.paymentReceived || 0);
+                                                            const cf = p - r;
+                                                            const sales = slip.totalAmount || 0;
+                                                            const tax = Math.round(sales * 0.1);
+                                                            dbUpdates = {
+                                                                ...updates,
+                                                                carriedForwardAmount: cf,
+                                                                grandTotal: cf + sales + tax
+                                                            };
+                                                        }
+                                                        if (baseId.startsWith('cover-')) {
+                                                            try {
+                                                                const createdId = await storage.addSlip({ ...slip, ...dbUpdates } as any);
+                                                                setPrintingSlips(prev => prev.map((s, i) => i === idx ? { ...s, id: createdId } : s));
+                                                            } catch (err) {
+                                                                console.error('Failed to create cover slip in Firestore on update:', err);
+                                                            }
+                                                        } else {
+                                                            storage.updateSlip(baseId, dbUpdates).catch(console.error);
+                                                        }
                                                     }
                                                 }}
                                             />
