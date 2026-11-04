@@ -1119,37 +1119,73 @@ export const SlipManager: React.FC<{
         const normalizedCustomer = normalizeForSearch(customerName);
         const normalizedSiteName = normalizeForSearch(siteName);
 
-        slips.forEach(s => {
+        const matchingSlips = slips.filter(s => {
+            if (s.id === editingSlipId) return false;
             const isCustMatch = s.customerName === customerName || normalizeForSearch(s.customerName || '') === normalizedCustomer;
             const isSiteMatch = normalizeForSearch(s.constructionName || '') === normalizedSiteName;
+            return isCustMatch && isSiteMatch;
+        });
 
-            if (isCustMatch && isSiteMatch && s.id !== editingSlipId) {
+        // 第1パス: 実納品（仮納品書・納品書）を先に集計（updatedAt降順による順序依存を排除）
+        matchingSlips.forEach(s => {
+            if (s.type === 'provisional' || s.type === 'delivery') {
                 const month = s.date.slice(0, 7);
-                if (s.type === 'provisional' || s.type === 'delivery') {
-                    s.items.forEach(item => {
-                        const deliveredQty = item.deliveredQuantity !== undefined ? item.deliveredQuantity : (item.quantity || 0);
-                        if (deliveredQty <= 0) return;
-                        const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
-                        const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${month}`;
-                        if (!historyMap.has(key)) {
-                            historyMap.set(key, { 
-                                name: item.name, model: item.model || '', dims: item.dimensions || '', 
-                                price: itemPrice, month, 
-                                totalDelivered: 0, totalReturned: 0, item 
+                s.items.forEach(item => {
+                    const deliveredQty = item.deliveredQuantity !== undefined ? item.deliveredQuantity : (item.quantity || 0);
+                    if (deliveredQty <= 0) return;
+                    const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
+                    const itemMonth = item.date?.slice(0, 7) || month;
+                    const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${itemMonth}`;
+                    if (!historyMap.has(key)) {
+                        historyMap.set(key, { 
+                            name: item.name, model: item.model || '', dims: item.dimensions || '', 
+                            price: itemPrice, month: itemMonth, 
+                            totalDelivered: 0, totalReturned: 0, item 
+                        });
+                    }
+                    const entry = historyMap.get(key)!;
+                    entry.totalDelivered += deliveredQty;
+                });
+            }
+        });
+
+        // 第2パス: 返品伝票を突合（historyMonth を最優先し、月跨ぎ返品でも納品残から正確に減算）
+        matchingSlips.forEach(s => {
+            if (s.type === 'return') {
+                const month = s.date.slice(0, 7);
+                s.items.forEach(item => {
+                    const retQty = Math.abs(item.quantity);
+                    if (retQty <= 0) return;
+                    const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
+                    const targetMonth = (item as any).historyMonth || item.date?.slice(0, 7) || month;
+                    const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${targetMonth}`;
+                    if (historyMap.has(key)) {
+                        historyMap.get(key)!.totalReturned += retQty;
+                    } else {
+                        // historyMonth無しの過去データや単価・月跨ぎフォールバック: 同一品目・規格の納品枠から古い順に減算
+                        let remaining = retQty;
+                        const candidates = Array.from(historyMap.values())
+                            .filter(e => e.name === item.name && e.model === (item.model || '') && e.dims === (item.dimensions || ''))
+                            .sort((a, b) => {
+                                const priceMatchA = a.price === itemPrice ? 0 : 1;
+                                const priceMatchB = b.price === itemPrice ? 0 : 1;
+                                if (priceMatchA !== priceMatchB) return priceMatchA - priceMatchB;
+                                return a.month.localeCompare(b.month);
                             });
+                        for (const cand of candidates) {
+                            const avail = cand.totalDelivered - cand.totalReturned;
+                            if (avail > 0) {
+                                const deduct = Math.min(avail, remaining);
+                                cand.totalReturned += deduct;
+                                remaining -= deduct;
+                                if (remaining <= 0) break;
+                            }
                         }
-                        const entry = historyMap.get(key)!;
-                        entry.totalDelivered += deliveredQty;
-                    });
-                } else {
-                    s.items.forEach(item => {
-                        const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
-                        const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${item.date?.slice(0, 7) || month}`;
-                        if (historyMap.has(key)) {
-                            historyMap.get(key)!.totalReturned += Math.abs(item.quantity);
+                        if (remaining > 0 && candidates.length > 0) {
+                            candidates[0].totalReturned += remaining;
                         }
-                    });
-                }
+                    }
+                });
             }
         });
 
