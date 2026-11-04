@@ -989,6 +989,22 @@ export const SlipManager: React.FC<{
 
     useEffect(() => {
         if (cart.length === 0 || editingSlipId) return;
+
+        if (activeMode === 'return') {
+            const normCust = normalizeForSearch(customerName);
+            const normSite = normalizeForSearch(siteName);
+            const filtered = cart.filter(item => {
+                const hCust = (item as any).historyCustomerName;
+                const hSite = (item as any).historySiteName;
+                if (hCust && hCust !== normCust) return false;
+                if (hSite && hSite !== normSite) return false;
+                return true;
+            });
+            if (filtered.length !== cart.length) {
+                onUpdateCart(filtered);
+            }
+            return;
+        }
         
         const nextCart = cart.map(item => {
             // 返品アイテム（履歴から追加されたもの等）の場合は単価を自動で再計算しない
@@ -1093,7 +1109,7 @@ export const SlipManager: React.FC<{
     }, [customerName, showSuggestions, customers]);
 
     const siteHistoryItems = useMemo(() => {
-        if (!customerName) return [];
+        if (!customerName || !siteName.trim()) return [];
         
         const historyMap = new Map<string, { 
             name: string; model: string; dims: string; price: number; month: string; 
@@ -1101,11 +1117,11 @@ export const SlipManager: React.FC<{
         }>();
 
         const normalizedCustomer = normalizeForSearch(customerName);
-        const normalizedSiteName = siteName ? normalizeForSearch(siteName) : '';
+        const normalizedSiteName = normalizeForSearch(siteName);
 
         slips.forEach(s => {
             const isCustMatch = s.customerName === customerName || normalizeForSearch(s.customerName || '') === normalizedCustomer;
-            const isSiteMatch = !normalizedSiteName || normalizeForSearch(s.constructionName || '') === normalizedSiteName;
+            const isSiteMatch = normalizeForSearch(s.constructionName || '') === normalizedSiteName;
 
             if (isCustMatch && isSiteMatch && s.id !== editingSlipId) {
                 const month = s.date.slice(0, 7);
@@ -1148,6 +1164,8 @@ export const SlipManager: React.FC<{
                     totalDelivered: entry.totalDelivered,
                     totalReturned: entry.totalReturned,
                     historyMonth: entry.month,
+                    historySiteName: normalizedSiteName,
+                    historyCustomerName: normalizedCustomer,
                     appliedPrice: entry.price
                 };
             })
@@ -1288,6 +1306,9 @@ export const SlipManager: React.FC<{
         if (!customerName || cart.length === 0 || !receivingPerson.trim()) {
             return alert("必須項目（顧客、受付担当）を入力してください。");
         }
+        if (activeMode === 'return' && !siteName.trim()) {
+            return alert("返品処理では現場名を必ず選択・入力してください。");
+        }
 
         // F-10 / No.12: 仕入値（原価）無しの行がある場合は請求を行えないガード
         const missingCostItems = cart.filter(i => (i.costPrice == null || i.costPrice <= 0) && !i.name.includes('【調整品目】'));
@@ -1346,12 +1367,16 @@ export const SlipManager: React.FC<{
                 return s + ((i.appliedPrice || 0) * qtyToUse);
             }, 0);
 
+            const canonicalSiteName = activeMode === 'return'
+                ? (existingSiteNames.find(es => normalizeForSearch(es) === normalizeForSearch(siteName.trim())) || siteName.trim())
+                : siteName;
+
             const matchedCustomer = customers.find(c => c.name === customerName);
             const finalCustomerId = matchedCustomer?.id;
             let finalSiteId: string | undefined = undefined;
 
-            if (matchedCustomer && siteName && siteName.trim()) {
-                const sTrim = siteName.trim();
+            if (matchedCustomer && canonicalSiteName && canonicalSiteName.trim()) {
+                const sTrim = canonicalSiteName.trim();
                 const existingSite = matchedCustomer.sites?.find((s: any) => s.name === sTrim);
                 if (existingSite) {
                     finalSiteId = existingSite.id;
@@ -1366,7 +1391,7 @@ export const SlipManager: React.FC<{
             if (editingSlipId) {
                 const targetSlip = slips.find(sl => sl.id === editingSlipId);
                 const updateData: Partial<Slip> = {
-                    date: slipDate, orderDate, customerName, constructionName: siteName, 
+                    date: slipDate, orderDate, customerName, constructionName: canonicalSiteName, 
                     customerId: finalCustomerId, siteId: finalSiteId, items: processedItems,
                     totalAmount: total, taxAmount: Math.round(total * 0.1), grandTotal: Math.round(total * 1.1),
                     note, deliveryTime: time, deliveryDestination: dest, orderingPerson, customerOrderNumber, receivingPerson
@@ -1383,7 +1408,7 @@ export const SlipManager: React.FC<{
                                     orderingPerson,
                                     receivingPerson,
                                     customerName,
-                                    constructionName: siteName
+                                    constructionName: canonicalSiteName
                                 });
                             }
                         }
@@ -1399,7 +1424,7 @@ export const SlipManager: React.FC<{
                 const gid = generateId();
                 const sNo = generateSlipNumber();
                 const newSlip: Omit<Slip, 'id'> = {
-                    createdAt: Date.now(), date: slipDate, orderDate, customerName, constructionName: siteName, 
+                    createdAt: Date.now(), date: slipDate, orderDate, customerName, constructionName: canonicalSiteName, 
                     customerId: finalCustomerId, siteId: finalSiteId, items: processedItems.map(i => ({ ...i, sourceSlipNo: sNo })),
                     totalAmount: total, taxAmount: Math.round(total * 0.1), grandTotal: Math.round(total * 1.1),
                     note, deliveryTime: time, deliveryDestination: dest, groupId: gid, slipNumber: sNo,
