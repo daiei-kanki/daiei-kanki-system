@@ -976,6 +976,7 @@ export const SlipManager: React.FC<{
     const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set<string>());
     const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const savingLockRef = useRef(false);
     const [isAnalyzingReturn, setIsAnalyzingReturn] = useState(false);
     const [returnAmbiguityResults, setReturnAmbiguityResults] = useState<any[]>([]);
     const [selectedSuggestions, setSelectedSuggestions] = useState<Map<string, any>>(new Map());
@@ -1281,6 +1282,7 @@ export const SlipManager: React.FC<{
     }, [onUpdateCart]);
 
     const handleSave = async () => {
+        if (isSaving || savingLockRef.current) return;
         if (!customerName || cart.length === 0 || !receivingPerson.trim()) {
             return alert("必須項目（顧客、受付担当）を入力してください。");
         }
@@ -1291,6 +1293,8 @@ export const SlipManager: React.FC<{
             const names = missingCostItems.map(i => i.name || '名称未設定').join(', ');
             return alert(`⚠️ 請求発行ガード（No.12）: 以下の明細に仕入値（原価）が設定されていません。仕入値を入力してください。\n対象: ${names}`);
         }
+        savingLockRef.current = true;
+        setIsSaving(true);
         try {
             const targetSlip = editingSlipId ? slips.find(sl => sl.id === editingSlipId) : null;
             const prevSlipDate = targetSlip?.date;
@@ -1411,11 +1415,14 @@ export const SlipManager: React.FC<{
                 onClearCart();
                 handleTabChange(activeMode === 'return' ? 'history' : 'pending');
             }
-        } finally { setIsSaving(false); }
+        } finally {
+            savingLockRef.current = false;
+            setIsSaving(false);
+        }
     };
 
     const handleConfirmDelivery = async () => {
-        if (!confirmingOutbound || isSaving) return;
+        if (!confirmingOutbound || isSaving || savingLockRef.current) return;
         if (!issuerName.trim()) {
             alert('出庫担当者の名前を入力してください。');
             return;
@@ -1434,6 +1441,7 @@ export const SlipManager: React.FC<{
             return;
         }
 
+        savingLockRef.current = true;
         setIsSaving(true);
         try {
             const missingItems: SlipItem[] = [];
@@ -1532,7 +1540,10 @@ export const SlipManager: React.FC<{
                 handleTabChange('pending');
                 setPrintingSlips(splitSlipIntoPages({ ...provSlip, id: provId || generateId() } as Slip));
             }
-        } finally { setIsSaving(false); }
+        } finally {
+            savingLockRef.current = false;
+            setIsSaving(false);
+        }
     };
 
     const handleInvoiceIssuance = async (cName: string, targetSite: string | null, allSlipsForCustomer: Slip[]) => {
