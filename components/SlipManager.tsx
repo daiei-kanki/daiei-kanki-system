@@ -768,10 +768,10 @@ const CartItemRow = React.memo(({
                                                     n = -n;
                                                 }
                                                 setLocalQty(n.toString());
-                                                onUpdateCart(p => p.map(pi => pi.id === item.id ? { ...pi, quantity: n, ...(isProvEdit ? { deliveredQuantity: n } : {}) } : pi));
+                                                onUpdateCart(p => p.map(pi => pi.id === item.id ? { ...pi, quantity: n } : pi));
                                             } else if (val === '') {
                                                 setLocalQty('');
-                                                onUpdateCart(p => p.map(pi => pi.id === item.id ? { ...pi, quantity: 0, ...(isProvEdit ? { deliveredQuantity: 0 } : {}) } : pi));
+                                                onUpdateCart(p => p.map(pi => pi.id === item.id ? { ...pi, quantity: 0 } : pi));
                                             } else if (val === '-') {
                                                 setLocalQty('-');
                                             }
@@ -1109,8 +1109,10 @@ export const SlipManager: React.FC<{
 
             if (isCustMatch && isSiteMatch && s.id !== editingSlipId) {
                 const month = s.date.slice(0, 7);
-                if (s.type !== 'return') {
+                if (s.type === 'provisional' || s.type === 'delivery') {
                     s.items.forEach(item => {
+                        const deliveredQty = item.deliveredQuantity !== undefined ? item.deliveredQuantity : (item.quantity || 0);
+                        if (deliveredQty <= 0) return;
                         const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
                         const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${month}`;
                         if (!historyMap.has(key)) {
@@ -1121,7 +1123,7 @@ export const SlipManager: React.FC<{
                             });
                         }
                         const entry = historyMap.get(key)!;
-                        entry.totalDelivered += (item.deliveredQuantity !== undefined ? item.deliveredQuantity : (item.quantity || 0));
+                        entry.totalDelivered += deliveredQty;
                     });
                 } else {
                     s.items.forEach(item => {
