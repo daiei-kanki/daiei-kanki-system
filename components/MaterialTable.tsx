@@ -113,6 +113,11 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
         const price = parseFloat(value);
         if (isNaN(price)) return;
         if (!activeCustomer) return;
+        if (price <= 0) {
+            alert('エラー: 単価ルール（固定単価）に0円以下の金額は保存できません。');
+            setEditingPriceId(null);
+            return;
+        }
         try {
             const matchedCust = customers.find(c => c.name === activeCustomer);
             await storage.addPricingRule({
@@ -175,6 +180,9 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
         if (isNaN(rate)) return alert("有効な数値を入力してください");
 
         if (activeCustomer) {
+            if (calcType === 'fixed' && rate <= 0) {
+                return alert('エラー: 単価ルール（固定単価）に0円以下の金額は保存できません。');
+            }
             if (!window.confirm(`【確認】選択した${selectedIds.size}件を、${activeCustomer}の個別単価ルールとして保存しますか？`)) return;
             setIsProcessing(true);
             try {
