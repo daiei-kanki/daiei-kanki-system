@@ -101,7 +101,7 @@ const App: React.FC = () => {
 
                     const updates: any = { customerId: customer.id };
                     
-                    if (sName) {
+                    if (sName && sName !== '全現場一括集計' && data.type !== 'cover') {
                         let site = customer.sites.find((s: any) => s.name === sName);
                         if (!site) {
                             site = { id: crypto.randomUUID(), name: sName };
@@ -560,7 +560,7 @@ const App: React.FC = () => {
                         <div className="flex gap-4">
                             <StatsCard title="在庫総額(原価)" value={`¥${items.reduce((s, i) => s + ((i.costPrice || 0) * (i.quantity || 0)), 0).toLocaleString()}`} icon={Database} color="rose" compact />
                             <StatsCard title="資材総数" value={items.length.toLocaleString()} icon={Package} color="blue" compact />
-                            <StatsCard title="本日の伝票" value={slips.filter(s => s.date === getTodayJSTString()).length.toString()} icon={TrendingUp} color="emerald" compact />
+                            <StatsCard title="本日の伝票" value={slips.filter(s => s.type !== 'cover' && s.date === getTodayJSTString()).length.toString()} icon={TrendingUp} color="emerald" compact />
                         </div>
                     </div>
 

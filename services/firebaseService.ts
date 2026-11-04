@@ -3,6 +3,7 @@ import {
     collection,
     onSnapshot,
     addDoc,
+    setDoc,
     updateDoc,
     deleteDoc,
     doc,
@@ -197,6 +198,12 @@ export const addSlip = async (s: Omit<Slip, 'id'>) => {
     const data = sanitizeData(s);
     const docRef = await addDoc(collection(db, COLLECTIONS.SLIPS), { ...data, updatedAt: Date.now() });
     return docRef.id;
+};
+export const setSlipWithId = async (id: string, s: Partial<Slip>) => {
+    const sanitizedData = sanitizeData(s);
+    const docRef = doc(db, COLLECTIONS.SLIPS, id);
+    await setDoc(docRef, { ...sanitizedData, updatedAt: Date.now() }, { merge: true });
+    return id;
 };
 export const updateSlip = async (id: string, data: Partial<Slip>) => {
     const sanitizedData = removeUndefined(data);
