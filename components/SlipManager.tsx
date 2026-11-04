@@ -1090,15 +1090,19 @@ export const SlipManager: React.FC<{
     }, [siteName, existingSiteNames]);
 
     const handleApplyAIResults = (confirmedItems: any[]) => {
-        const newCartItems = confirmedItems.filter(ci => ci.selectedItem).map(item => ({
-            ...item.selectedItem,
-            quantity: -Math.abs(item.quantity),
-            deliveredQuantity: 0,
-            id: `${item.selectedItem.id}__${generateId()}`,
-            historyMonth: item.selectedItem.date,
-            availableQuantity: item.selectedItem.maxAvailable,
-            updatedAt: Date.now()
-        }));
+        const newCartItems = confirmedItems.filter(ci => ci.selectedItem).map(item => {
+            const origId = item.selectedItem.originalMaterialId || (String(item.selectedItem.id || '').startsWith('hist__') ? generateId() : String(item.selectedItem.id || generateId()).split('__')[0]);
+            return {
+                ...item.selectedItem,
+                originalMaterialId: origId,
+                quantity: -Math.abs(item.quantity),
+                deliveredQuantity: 0,
+                id: `${origId}__${generateId()}`,
+                historyMonth: item.selectedItem.date,
+                availableQuantity: item.selectedItem.maxAvailable,
+                updatedAt: Date.now()
+            };
+        });
         onUpdateCart(prev => [...prev, ...newCartItems]);
         setShowReturnResolutionModal(false);
     };
@@ -1192,9 +1196,11 @@ export const SlipManager: React.FC<{
         return Array.from(historyMap.values())
             .map((entry, idx) => {
                 const historyKey = `hist__${entry.name}__${entry.model}__${entry.dims}__${entry.price}__${entry.month}__${idx}`;
+                const origId = (entry.item as any).originalMaterialId || (entry.item.id && !entry.item.id.startsWith('hist__') ? entry.item.id.split('__')[0] : undefined);
                 return {
                     ...entry.item,
                     id: historyKey,
+                    originalMaterialId: origId,
                     historyKey,
                     availableQuantity: entry.totalDelivered - entry.totalReturned,
                     totalDelivered: entry.totalDelivered,
@@ -1215,7 +1221,7 @@ export const SlipManager: React.FC<{
     const { itemSuggestions, totalMatchingCount } = useMemo(() => {
         let baseItems: any[] = [];
         if (activeMode === 'return') {
-            baseItems = siteHistoryItems.length > 0 ? siteHistoryItems : masterItems;
+            baseItems = siteHistoryItems;
             if (!itemSearchQuery.trim()) {
                 const decorated = baseItems.slice(0, 100).map((it, idx) => ({
                     ...it,
@@ -1248,7 +1254,8 @@ export const SlipManager: React.FC<{
             ? { ...item, quantity: 0, deliveredQuantity: 0, appliedPrice: price }
             : { ...item, quantity: 0, appliedPrice: price, deliveredQuantity: 0 };
         
-        onUpdateCart(prev => [...prev, { ...itemToAdd, id: `${item.id}__${generateId()}` }]);
+        const baseItemId = item.originalMaterialId || (item.id && !String(item.id).startsWith('hist__') ? String(item.id).split('__')[0] : (masterItems.find(m => m.name === item.name && (m.model || '') === (item.model || '') && (m.dimensions || '') === (item.dimensions || ''))?.id || generateId()));
+        onUpdateCart(prev => [...prev, { ...itemToAdd, originalMaterialId: baseItemId, id: `${baseItemId}__${generateId()}` }]);
         setItemSearchQuery(''); setShowItemSuggestions(false);
         setSelectedSuggestions(new Map());
     };
@@ -1274,7 +1281,10 @@ export const SlipManager: React.FC<{
                 ? { ...item, quantity: 0, deliveredQuantity: 0, appliedPrice: price }
                 : { ...item, quantity: 0, appliedPrice: price, deliveredQuantity: 0 };
         });
-        onUpdateCart(prev => [...prev, ...itemsToAdd.map(it => ({ ...it, id: `${it.id}__${generateId()}` }))]);
+        onUpdateCart(prev => [...prev, ...itemsToAdd.map(it => {
+            const baseItemId = it.originalMaterialId || (it.id && !String(it.id).startsWith('hist__') ? String(it.id).split('__')[0] : (masterItems.find(m => m.name === it.name && (m.model || '') === (it.model || '') && (m.dimensions || '') === (it.dimensions || ''))?.id || generateId()));
+            return { ...it, originalMaterialId: baseItemId, id: `${baseItemId}__${generateId()}` };
+        })]);
         setItemSearchQuery(''); setShowItemSuggestions(false);
         setSelectedSuggestions(new Map());
     };
@@ -1362,7 +1372,8 @@ export const SlipManager: React.FC<{
 
             const processedItems = cart.map((i: SlipItem) => {
                 const qty = i.quantity;
-                const realId = i.id.includes('__') ? i.id.split('__')[0] : i.id;
+                const rawPrefix = i.id.includes('__') ? i.id.split('__')[0] : i.id;
+                const realId = (i as any).originalMaterialId || (rawPrefix !== 'hist' ? rawPrefix : (masterItems.find(m => m.name === i.name && (m.model || '') === (i.model || '') && (m.dimensions || '') === (i.dimensions || ''))?.id || generateId()));
                 // 仮納品書の修正時、元のdeliveredQuantityを保持する（未設定時はqtyを使用）
                 const finalDeliveredQty = isProvEdit ? (i.deliveredQuantity ?? qty) : qty;
                 
@@ -1384,12 +1395,21 @@ export const SlipManager: React.FC<{
             });
 
             if (activeMode === 'return') {
-                const overReturns = processedItems.filter(i => {
-                    const avail = (i as any).availableQuantity;
-                    return avail !== undefined && Math.abs(i.quantity) > avail;
+                const returnTotalsByKey = new Map<string, { name: string; totalQty: number; avail?: number }>();
+                processedItems.forEach(i => {
+                    const k = (i as any).historyKey || `${i.name}__${i.model || ''}__${i.dimensions || ''}__${i.appliedPrice || 0}__${(i as any).historyMonth || ''}`;
+                    const matchedHist = siteHistoryItems.find(h => h.historyKey === (i as any).historyKey || (h.name === i.name && (h.model || '') === (i.model || '') && (h.dimensions || '') === (i.dimensions || '')));
+                    const avail = (i as any).availableQuantity !== undefined ? (i as any).availableQuantity : matchedHist?.availableQuantity;
+                    const prev = returnTotalsByKey.get(k);
+                    if (prev) {
+                        prev.totalQty += Math.abs(i.quantity);
+                    } else {
+                        returnTotalsByKey.set(k, { name: i.name, totalQty: Math.abs(i.quantity), avail });
+                    }
                 });
+                const overReturns = Array.from(returnTotalsByKey.values()).filter(entry => entry.avail === undefined || entry.totalQty > entry.avail);
                 if (overReturns.length > 0) {
-                    const names = overReturns.map(i => i.name).join(', ');
+                    const names = Array.from(new Set(overReturns.map(i => i.name))).join(', ');
                     if (!window.confirm(`${names} の返品数が納品実績を超えていますが、よろしいですか？`)) {
                         setIsSaving(false);
                         return;
@@ -2403,6 +2423,7 @@ export const SlipManager: React.FC<{
                                                     <Search className={`absolute left-4 top-4 ${activeMode === 'return' ? 'text-rose-400' : 'text-slate-400'}`} size={18} />
                                                     <input 
                                                         value={itemSearchQuery} 
+                                                        onFocus={() => setShowItemSuggestions(true)}
                                                         onChange={e => { setItemSearchQuery(e.target.value); setShowItemSuggestions(true); }} 
                                                         placeholder={activeMode === 'return' ? "現場の納品履歴から資材をピックアップ..." : "複数キーワードで資材を検索（例: VP 50 エルボ）"} 
                                                         className={`w-full pl-12 pr-4 py-4 bg-slate-50 border-2 ${activeMode === 'return' ? 'border-rose-100 focus:border-rose-500' : 'border-slate-100 focus:border-blue-500'} rounded-2xl font-bold transition-all outline-none shadow-inner text-sm`} 

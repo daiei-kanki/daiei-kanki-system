@@ -309,12 +309,14 @@ const itemRelevanceScore = (item: MaterialItem, terms: string[]): number | null 
         normalizeForSearch(item.location || ''),
         normalizeForSearch(item.dimensions || ''),
         normalizeForSearch(item.size || ''),
-        normalizeForSearch((item as any).historyMonth || ''),
     ];
+    const historyMonthField = normalizeForSearch((item as any).historyMonth || '');
 
     let totalScore = 0;
     for (const term of terms) {
-        const best = Math.max(...fields.map(f => termScore(f, term)));
+        const isMonthTerm = /^\d{4}[-/]\d{1,2}$/.test(term);
+        const targetFields = (isMonthTerm && historyMonthField) ? [...fields, historyMonthField] : fields;
+        const best = Math.max(...targetFields.map(f => termScore(f, term)));
         if (best === 0) return null; // term not found → filter out
         totalScore += best;
     }
