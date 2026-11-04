@@ -74,7 +74,7 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="品名・分類・型式・メーカー・棚番号で検索..."
+                            placeholder="品名・分類・型式・寸法・規格サイズ・メーカー・棚番号で検索..."
                             className="w-full pl-10 sm:pl-12 pr-4 py-2.5 sm:py-3 bg-white border-2 border-slate-200 rounded-2xl text-sm sm:text-base font-bold outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
                             autoFocus
                         />
@@ -166,6 +166,12 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
                                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">寸法</div>
                                         <div className="font-bold text-slate-900 font-mono text-sm">{selectedItem.dimensions || '-'}</div>
                                     </div>
+                                    {selectedItem.size && (
+                                        <div className="col-span-2">
+                                            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">規格 / サイズ</div>
+                                            <div className="font-bold text-slate-900 font-mono text-sm">{selectedItem.size}</div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="border-t pt-4">

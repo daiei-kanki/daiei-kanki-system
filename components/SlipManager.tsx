@@ -2723,7 +2723,7 @@ export const SlipManager: React.FC<{
                                                                                 <div className="flex justify-between items-center">
                                                                                     <span className="text-xs text-slate-700 font-mono font-bold truncate tracking-tight">
                                                                                         {i.manufacturer && <span className="mr-2 text-slate-500 bg-slate-100 px-1.5 py-0.5 text-[10px] font-black rounded">{i.manufacturer}</span>}
-                                                                                        {i.model} {i.dimensions}
+                                                                                        {[i.model, i.dimensions, i.size ? `(${i.size})` : ''].filter(Boolean).join(' ')}
                                                                                     </span>
                                                                                     <span className="text-[9px] font-bold text-slate-300 group-hover:text-blue-400 transition-colors">クリックで即時追加</span>
                                                                                 </div>

@@ -88,7 +88,7 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
             _searchName: (item.name || '').toLowerCase(),
             _searchCategory: (item.category || '').toLowerCase(),
             _searchManufacturer: (item.manufacturer || '').toLowerCase(),
-            _searchModel: `${item.model || ''} ${item.dimensions || ''}`.toLowerCase(),
+            _searchModel: `${item.model || ''} ${item.dimensions || ''} ${item.size || ''}`.toLowerCase(),
             _searchLocation: (item.location || '').toLowerCase()
         }));
     }, [items]);
@@ -391,7 +391,7 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
                             </th>
                             <th className="p-2 w-1/4">
                                 <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 cursor-pointer hover:text-blue-600" onClick={() => onSort('model')}>型式 / メーカー <SortIcon field="model" config={sortConfig} /></div>
-                                <input value={filters.model} onChange={e => setFilters({ ...filters, model: e.target.value })} placeholder="型式・寸法..." className="w-full px-2 py-1 text-xs border rounded bg-slate-50 focus:bg-white outline-none focus:ring-1 focus:ring-blue-400" />
+                                <input value={filters.model} onChange={e => setFilters({ ...filters, model: e.target.value })} placeholder="型式・寸法・規格サイズ..." className="w-full px-2 py-1 text-xs border rounded bg-slate-50 focus:bg-white outline-none focus:ring-1 focus:ring-blue-400" />
                                 <div className="flex gap-1 mt-1">
                                     <input value={filters.manufacturer} onChange={e => setFilters({ ...filters, manufacturer: e.target.value })} placeholder="メーカー..." className="flex-1 px-2 py-1 text-xs border rounded bg-slate-50 focus:bg-white outline-none focus:ring-1 focus:ring-blue-400" />
                                     <input value={filters.location} onChange={e => setFilters({ ...filters, location: e.target.value })} placeholder="棚番号..." className="w-20 px-2 py-1 text-xs border rounded bg-slate-50 focus:bg-white outline-none focus:ring-1 focus:ring-blue-400 font-black text-indigo-600" />
