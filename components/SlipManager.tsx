@@ -1083,6 +1083,7 @@ export const SlipManager: React.FC<{
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [showSiteSuggestions, setShowSiteSuggestions] = useState(false);
     const [itemSearchQuery, setItemSearchQuery] = useState('');
+    const [suggestionLimit, setSuggestionLimit] = useState(100);
     const [showItemSuggestions, setShowItemSuggestions] = useState(false);
     const [isScanning, setIsScanning] = useState(false);
 
@@ -1379,14 +1380,14 @@ export const SlipManager: React.FC<{
         if (activeMode === 'return') {
             baseItems = siteHistoryItems;
             if (!itemSearchQuery.trim()) {
-                const decorated = baseItems.slice(0, 100).map((it, idx) => ({
+                const decorated = baseItems.slice(0, suggestionLimit).map((it, idx) => ({
                     ...it,
                     suggestionKey: it.historyKey || `sug__${it.id}__${idx}`
                 }));
                 return { itemSuggestions: decorated, totalMatchingCount: baseItems.length };
             }
             const allMatches = filterAndSortItems(baseItems, itemSearchQuery);
-            const decorated = allMatches.slice(0, 100).map((it, idx) => ({
+            const decorated = allMatches.slice(0, suggestionLimit).map((it, idx) => ({
                 ...it,
                 suggestionKey: it.historyKey || `sug__${it.id}__${idx}`
             }));
@@ -1395,12 +1396,12 @@ export const SlipManager: React.FC<{
 
         if (!itemSearchQuery.trim()) return { itemSuggestions: [], totalMatchingCount: 0 };
         const allMatches = filterAndSortItems(masterItems, itemSearchQuery);
-        const decorated = allMatches.slice(0, 100).map((it, idx) => ({
+        const decorated = allMatches.slice(0, suggestionLimit).map((it, idx) => ({
             ...it,
             suggestionKey: `sug__${it.id}__${idx}`
         }));
         return { itemSuggestions: decorated, totalMatchingCount: allMatches.length };
-    }, [itemSearchQuery, masterItems, activeMode, siteHistoryItems]);
+    }, [itemSearchQuery, suggestionLimit, masterItems, activeMode, siteHistoryItems]);
 
     const handleAddFromMaster = (item: any) => {
         const price = activeMode === 'return'
@@ -2661,7 +2662,7 @@ export const SlipManager: React.FC<{
                                                     <input 
                                                         value={itemSearchQuery} 
                                                         onFocus={() => setShowItemSuggestions(true)}
-                                                        onChange={e => { setItemSearchQuery(e.target.value); setShowItemSuggestions(true); }} 
+                                                        onChange={e => { setItemSearchQuery(e.target.value); setSuggestionLimit(100); setShowItemSuggestions(true); }} 
                                                         placeholder={activeMode === 'return' ? "現場の納品履歴から資材をピックアップ..." : "複数キーワードで資材を検索（例: VP 50 エルボ）"} 
                                                         className={`w-full pl-12 pr-4 py-4 bg-slate-50 border-2 ${activeMode === 'return' ? 'border-rose-100 focus:border-rose-500' : 'border-slate-100 focus:border-blue-500'} rounded-2xl font-bold transition-all outline-none shadow-inner text-sm`} 
                                                     />
@@ -2669,9 +2670,9 @@ export const SlipManager: React.FC<{
                                                         <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 shadow-[0_20px_50px_rgba(0,0,0,0.2)] z-[100] rounded-[1.5rem] mt-2 flex flex-col overflow-hidden max-h-[440px]">
                                                             <div className="bg-slate-50 px-4 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b flex justify-between items-center">
                                                                 <span>
-                                                                    {totalMatchingCount > 100
-                                                                        ? `上位100件表示中 (全 ${totalMatchingCount.toLocaleString()} 件) — キーワードを追加して絞り込んでください`
-                                                                        : `検索結果 (${totalMatchingCount}件)`}
+                                                                    {totalMatchingCount > itemSuggestions.length
+                                                                        ? `${itemSuggestions.length.toLocaleString()}件表示中 (全 ${totalMatchingCount.toLocaleString()} 件)`
+                                                                        : `検索結果 (${totalMatchingCount.toLocaleString()}件)`}
                                                                 </span>
                                                                 {selectedSuggestions.size > 0 && <span className="text-blue-600">{selectedSuggestions.size}件 選択中</span>}
                                                             </div>
@@ -2731,6 +2732,17 @@ export const SlipManager: React.FC<{
                                                                         </div>
                                                                     );
                                                                 })}
+                                                                {totalMatchingCount > itemSuggestions.length && (
+                                                                    <div className="p-3 bg-slate-50/70 text-center">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={(e) => { e.stopPropagation(); setSuggestionLimit(prev => prev + 100); }}
+                                                                            className="px-4 py-2 bg-white hover:bg-blue-50 text-blue-600 font-black text-xs rounded-xl border border-blue-200 shadow-sm transition-colors"
+                                                                        >
+                                                                            さらに100件を表示（残り {(totalMatchingCount - itemSuggestions.length).toLocaleString()} 件）
+                                                                        </button>
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                             <div className="p-4 bg-slate-50 border-t flex gap-3">
                                                                 <button 
