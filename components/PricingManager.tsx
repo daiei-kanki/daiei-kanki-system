@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { PricingRule, MaterialItem, Customer, MATERIAL_CATEGORIES } from '../types';
-import { normalizeForSearch } from '../services/searchUtils';
+import { normalizeForSearch, filterAndSortItems } from '../services/searchUtils';
 // Fixed: Added missing Loader2 import from lucide-react
 import { Plus, Trash2, X, Users, Tag, ArrowLeft, ChevronDown, ChevronRight, CheckSquare, Square, Save, UserCheck, Layers, Search, MapPin, AlertCircle, Loader2, Edit3 } from 'lucide-react';
 import * as storage from '../services/firebaseService';
@@ -100,69 +100,239 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
         return result;
     }, [referenceRules]);
 
+    const [orphanedFilter, setOrphanedFilter] = useState<'all' | 'auto_ready' | 'dims_diff' | 'duplicate' | 'no_match'>('all');
+    const [orphanedSearchQuery, setOrphanedSearchQuery] = useState('');
+    const [manualSearchRuleId, setManualSearchRuleId] = useState<string | null>(null);
+    const [manualSearchQuery, setManualSearchQuery] = useState('');
+
+    const isDiagnosticReady = items.length > 0;
     const masterItemMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
     const orphanedRulesList = useMemo(() => {
-        if (items.length === 0) return [];
+        if (!isDiagnosticReady) return [];
         return rules.filter(r => r.materialId && !masterItemMap.has(r.materialId));
-    }, [rules, masterItemMap, items.length]);
+    }, [rules, masterItemMap, isDiagnosticReady]);
     const orphanedRulesCount = orphanedRulesList.length;
 
+    // 資材マスターの高速索引と各不整合ルールの診断結果（理由・候補・自動修復対象かどうか）
+    const orphanedDiagnostics = useMemo(() => {
+        if (!isDiagnosticReady) return [];
+
+        const by4Key = new Map<string, MaterialItem[]>();
+        const by3Key = new Map<string, MaterialItem[]>();
+        const byNameKey = new Map<string, MaterialItem[]>();
+
+        items.forEach(item => {
+            const nName = normalizeForSearch(item.name);
+            const nCat = normalizeForSearch(item.category);
+            const nModel = normalizeForSearch(item.model || '');
+            const nDims = normalizeForSearch(item.dimensions || '');
+            if (!nName) return;
+
+            const k4 = `${nName}__${nCat}__${nModel}__${nDims}`;
+            const k3 = `${nName}__${nCat}__${nModel}`;
+            if (!by4Key.has(k4)) by4Key.set(k4, []);
+            by4Key.get(k4)!.push(item);
+
+            if (!by3Key.has(k3)) by3Key.set(k3, []);
+            by3Key.get(k3)!.push(item);
+
+            if (!byNameKey.has(nName)) byNameKey.set(nName, []);
+            byNameKey.get(nName)!.push(item);
+        });
+
+        // 既に有効な資材IDを持つ生きた単価ルールの索引 (顧客 + 現場 + 資材ID)
+        const liveRuleScopeSet = new Set<string>();
+        rules.forEach(r => {
+            if (r.materialId && masterItemMap.has(r.materialId)) {
+                const sKey = `${normalizeForSearch(r.customerName)}__${normalizeForSearch(r.siteName || '')}__${r.materialId}`;
+                liveRuleScopeSet.add(sKey);
+            }
+        });
+
+        // 4項目一致（候補1件）の不整合ルールについて、同一顧客・同一現場・同一資材に複数ある場合は最新(updatedAt最大)の1本だけを自動修復対象にする
+        const bestOrphanRuleIdByScope = new Map<string, { ruleId: string; updatedAt: number }>();
+        orphanedRulesList.forEach(r => {
+            const nName = normalizeForSearch(r.materialName || '');
+            const nCat = normalizeForSearch(r.category || '');
+            const nModel = normalizeForSearch(r.model || '');
+            const nDims = normalizeForSearch(r.dimensions || '');
+            const exact = nName ? (by4Key.get(`${nName}__${nCat}__${nModel}__${nDims}`) || []) : [];
+            if (exact.length === 1) {
+                const targetMat = exact[0];
+                const sKey = `${normalizeForSearch(r.customerName)}__${normalizeForSearch(r.siteName || '')}__${targetMat.id}`;
+                if (!liveRuleScopeSet.has(sKey)) {
+                    const prev = bestOrphanRuleIdByScope.get(sKey);
+                    const rTime = r.updatedAt || 0;
+                    if (!prev || rTime > prev.updatedAt) {
+                        bestOrphanRuleIdByScope.set(sKey, { ruleId: r.id, updatedAt: rTime });
+                    }
+                }
+            }
+        });
+
+        return orphanedRulesList.map(r => {
+            const nName = normalizeForSearch(r.materialName || '');
+            const nCat = normalizeForSearch(r.category || '');
+            const nModel = normalizeForSearch(r.model || '');
+            const nDims = normalizeForSearch(r.dimensions || '');
+
+            const exactCandidates = nName ? (by4Key.get(`${nName}__${nCat}__${nModel}__${nDims}`) || []) : [];
+            const threeFieldCandidates = nName ? (by3Key.get(`${nName}__${nCat}__${nModel}`) || []) : [];
+            const nameCandidates = nName ? (byNameKey.get(nName) || []) : [];
+
+            let reasonType: 'auto_ready' | 'duplicate_live' | 'duplicate_orphan' | 'multi_exact' | 'dims_diff' | 'name_only' | 'no_match' = 'no_match';
+            let reasonLabel = '一致する資材候補なし（候補0件）';
+            let suggestedCandidates: MaterialItem[] = [];
+            let canAutoRelink = false;
+
+            if (exactCandidates.length === 1) {
+                const targetMat = exactCandidates[0];
+                const sKey = `${normalizeForSearch(r.customerName)}__${normalizeForSearch(r.siteName || '')}__${targetMat.id}`;
+                suggestedCandidates = exactCandidates;
+                if (liveRuleScopeSet.has(sKey)) {
+                    reasonType = 'duplicate_live';
+                    reasonLabel = '同一資材に有効な単価ルールが既に存在（重複のため自動付け替え除外）';
+                } else if (bestOrphanRuleIdByScope.get(sKey)?.ruleId !== r.id) {
+                    reasonType = 'duplicate_orphan';
+                    reasonLabel = '同一資材に別の新しい単価ルールが存在（旧ルール重複のため自動付け替え除外）';
+                } else {
+                    reasonType = 'auto_ready';
+                    reasonLabel = '4項目完全一致（候補1件・自動修復対象）';
+                    canAutoRelink = true;
+                }
+            } else if (exactCandidates.length > 1) {
+                reasonType = 'multi_exact';
+                reasonLabel = `4項目一致候補が複数あり（候補 ${exactCandidates.length}件）`;
+                suggestedCandidates = exactCandidates;
+            } else if (threeFieldCandidates.length > 0) {
+                reasonType = 'dims_diff';
+                reasonLabel = `寸法のみ不一致（品名・分類・型式一致の候補 ${threeFieldCandidates.length}件）`;
+                suggestedCandidates = threeFieldCandidates;
+            } else if (nameCandidates.length > 0) {
+                reasonType = 'name_only';
+                reasonLabel = `分類または型式・寸法が不一致（同名の資材候補 ${nameCandidates.length}件）`;
+                suggestedCandidates = nameCandidates;
+            }
+
+            return {
+                rule: r,
+                reasonType,
+                reasonLabel,
+                suggestedCandidates,
+                canAutoRelink
+            };
+        });
+    }, [isDiagnosticReady, items, rules, masterItemMap, orphanedRulesList]);
+
+    const handleBackupPricingRulesJson = () => {
+        try {
+            const payload = {
+                exportedAt: new Date().toISOString(),
+                totalRules: rules.length,
+                orphanedCount: orphanedRulesCount,
+                rules
+            };
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+            const a = document.createElement('a');
+            a.setAttribute('href', dataStr);
+            a.setAttribute('download', `単価ルール控え_${new Date().toISOString().slice(0, 10)}.json`);
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        } catch (e) {
+            console.error('Backup export failed:', e);
+        }
+    };
+
+    const handleManualRelinkRule = async (rule: PricingRule, targetMat: MaterialItem) => {
+        if (!window.confirm(
+            `以下の単価ルールを選択した資材へ紐付けますか？\n\n` +
+            `【ルール】${rule.customerName} (${rule.siteName || '全現場共通'}) / ${rule.materialName || '(未設定)'} / 型式:${rule.model || 'なし'} / 寸法:${rule.dimensions || 'なし'}\n` +
+            `【紐付け先資材】${targetMat.name} / 分類:${targetMat.category} / 型式:${targetMat.model || 'なし'} / 寸法:${targetMat.dimensions || 'なし'} (標準売価: ¥${(targetMat.sellingPrice || 0).toLocaleString()})`
+        )) {
+            return;
+        }
+        setIsSaving(true);
+        try {
+            // updatedAt は元の値を維持して背番号(materialId)のみ付け替える
+            await storage.updatePricingRule(rule.id, { materialId: targetMat.id }, { preserveTimestamp: true });
+            if (manualSearchRuleId === rule.id) {
+                setManualSearchRuleId(null);
+                setManualSearchQuery('');
+            }
+        } catch (err: any) {
+            alert(`紐付けに失敗しました: ${err?.message || '不明なエラー'}`);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDeleteOrphanedRule = async (rule: PricingRule) => {
+        const valText = rule.method === 'fixed_price' ? `固定 ¥${rule.value.toLocaleString()}` : (rule.method === 'percent_of_list' ? `定価の ${rule.value}%` : `原価+${rule.value}%`);
+        if (!window.confirm(
+            `「${rule.customerName}（${rule.siteName || '全現場共通'}）」の不整合単価ルールを削除してもよろしいですか？\n\n` +
+            `品名: ${rule.materialName || '(未設定)'} / 分類: ${rule.category || '(未設定)'} / 型式: ${rule.model || '(なし)'} / 寸法: ${rule.dimensions || '(なし)'} (${valText})\n` +
+            `※この操作は取り消せません。`
+        )) {
+            return;
+        }
+        setIsSaving(true);
+        try {
+            await storage.deletePricingRule(rule.id);
+        } catch (err: any) {
+            alert(`削除に失敗しました: ${err?.message || '不明なエラー'}`);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
     const handleRepairPricingRuleIds = async () => {
-        if (items.length === 0) {
+        if (!isDiagnosticReady) {
             return alert("⚠️ 資材マスターがまだ読み込まれていません。読み込み完了後に再度お試しください。");
         }
-        const orphanedRules = rules.filter(r => r.materialId && !masterItemMap.has(r.materialId));
-
-        if (orphanedRules.length === 0) {
+        if (orphanedDiagnostics.length === 0) {
             return alert("✅ すべての単価ルールの資材IDは正常です（実在しない資材IDは0件です）。");
         }
 
+        const autoTargets = orphanedDiagnostics.filter(d => d.canAutoRelink && d.suggestedCandidates.length === 1);
+        const dupSkippedCount = orphanedDiagnostics.filter(d => d.reasonType === 'duplicate_live' || d.reasonType === 'duplicate_orphan').length;
+        const dimsDiffCount = orphanedDiagnostics.filter(d => d.reasonType === 'dims_diff').length;
+        const otherHoldCount = orphanedDiagnostics.length - autoTargets.length;
+
         const confirmRun = window.confirm(
-            `🔍 単価ルールの背番号（資材ID）診断結果:\n実在しない資材IDを持つ単価ルールが【 ${orphanedRules.length} 件 】検出されました。\n\n` +
+            `🔍 単価ルールの背番号（資材ID）診断結果:\n` +
+            `実在しない資材IDを持つ単価ルールが【 ${orphanedDiagnostics.length} 件 】検出されました。\n\n` +
+            `・4項目完全一致（候補1件・重複なし）で自動再紐付け可能: ${autoTargets.length} 件\n` +
+            `・同一資材に新しいルールが存在するため保持（上書き防止）: ${dupSkippedCount} 件\n` +
+            `・寸法のみ不一致（不整合一覧で候補から手動選択可能）: ${dimsDiffCount} 件\n` +
+            `・その他の要確認保持: ${otherHoldCount - dupSkippedCount - dimsDiffCount} 件\n\n` +
             `【安全な自動照合・修復を実行しますか？】\n` +
-            `1. 品名・分類・型式・寸法がすべて完全一致し、候補が1件のみに絞られる場合だけ正しい資材IDへ付け替えます。\n` +
-            `2. 一致しないルールや複数候補があるルールはIDを空にせずそのまま残し、手動確認一覧へ表示します（別の資材に誤適用されるのを防ぎます）。`
+            `※ 実行前に単価ルール全件のバックアップ控え(JSON)を自動保存し、元の更新日時(updatedAt)を変えずに背番号のみ付け替えます。`
         );
 
         if (!confirmRun) return;
+
+        // 実行前に単価ルール全件の控えを自動ダウンロード保存
+        handleBackupPricingRulesJson();
 
         setIsSaving(true);
         let relinkedCount = 0;
 
         try {
-            const updatePromises = orphanedRules.map(rule => {
-                const normName = normalizeForSearch(rule.materialName || '');
-                const normCat = normalizeForSearch(rule.category || '');
-                const normModel = normalizeForSearch(rule.model || '');
-                const normDims = normalizeForSearch(rule.dimensions || '');
-
-                // 品名・分類・型式・寸法すべて一致し、かつ候補が1件だけの時のみ付け替え
-                const exactCandidates = items.filter(item => {
-                    return (
-                        normName !== '' &&
-                        normalizeForSearch(item.name) === normName &&
-                        normalizeForSearch(item.category) === normCat &&
-                        normalizeForSearch(item.model || '') === normModel &&
-                        normalizeForSearch(item.dimensions || '') === normDims
-                    );
-                });
-
-                if (exactCandidates.length === 1) {
-                    relinkedCount++;
-                    return storage.updatePricingRule(rule.id, { materialId: exactCandidates[0].id });
-                } else {
-                    // 解決できないルールは空にせずそのまま保持（他資材への誤適用防止）
-                    return Promise.resolve();
-                }
+            const updatePromises = autoTargets.map(d => {
+                relinkedCount++;
+                // updatedAt を変更せず元のまま保持することで、後から登録した新しい単価ルールより優先される逆転現象を防ぐ
+                return storage.updatePricingRule(d.rule.id, { materialId: d.suggestedCandidates[0].id }, { preserveTimestamp: true });
             });
 
             await Promise.all(updatePromises);
-            const remainingCount = orphanedRules.length - relinkedCount;
+            const remainingCount = orphanedDiagnostics.length - relinkedCount;
             alert(
                 `🎉 背番号照合・修復処理が完了しました！\n\n` +
-                `・完全一致（候補1件）により再紐付け完了: ${relinkedCount} 件\n` +
+                `・完全一致（候補1件・最新優先）により再紐付け完了: ${relinkedCount} 件\n` +
                 `・要確認として保持（ID未変更）: ${remainingCount} 件\n` +
-                `・不整合ルール残数: ${remainingCount} 件`
+                `・不整合ルール残数: ${remainingCount} 件\n\n` +
+                `※ 残りのルールは「不整合一覧を確認」画面から候補を選んで手動紐付け、または不要ルールの整理が行えます。`
             );
         } catch (err: any) {
             alert(`修復処理中にエラーが発生しました: ${err?.message || '不明なエラー'}`);
@@ -350,47 +520,199 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
     };
 
     if (view === 'orphaned') {
+        const filteredOrphaned = orphanedDiagnostics.filter(d => {
+            if (orphanedFilter === 'auto_ready' && !d.canAutoRelink) return false;
+            if (orphanedFilter === 'dims_diff' && d.reasonType !== 'dims_diff') return false;
+            if (orphanedFilter === 'duplicate' && d.reasonType !== 'duplicate_live' && d.reasonType !== 'duplicate_orphan') return false;
+            if (orphanedFilter === 'no_match' && d.reasonType !== 'no_match' && d.reasonType !== 'name_only') return false;
+            if (orphanedSearchQuery.trim()) {
+                const q = normalizeForSearch(orphanedSearchQuery);
+                const targetStr = normalizeForSearch(`${d.rule.customerName} ${d.rule.siteName || ''} ${d.rule.materialName || ''} ${d.rule.category || ''} ${d.rule.model || ''} ${d.rule.dimensions || ''}`);
+                if (!targetStr.includes(q)) return false;
+            }
+            return true;
+        });
+
+        const manualSearchResults = (manualSearchRuleId && manualSearchQuery.trim())
+            ? filterAndSortItems(items, manualSearchQuery).slice(0, 10)
+            : [];
+
         return (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col max-h-[90vh]">
                     <div className="p-6 border-b flex justify-between items-center bg-amber-50">
                         <div className="flex items-center gap-3">
-                            <button onClick={() => setView('list')} className="p-2 hover:bg-amber-100 rounded-lg"><ArrowLeft size={20} /></button>
+                            <button onClick={() => setView('list')} disabled={isSaving} className="p-2 hover:bg-amber-100 rounded-lg"><ArrowLeft size={20} /></button>
                             <div>
                                 <h2 className="text-lg font-bold text-amber-900">不整合単価ルール一覧 ({orphanedRulesList.length}件)</h2>
-                                <p className="text-xs text-amber-700">実在しない資材IDを指しているルールです。正しい資材へ手動紐付けするか削除できます。</p>
+                                <p className="text-xs text-amber-700">実在しない資材IDを指しているルールです。不一致の理由と候補資材を確認し、正しい資材へ手動紐付けするか削除できます。</p>
                             </div>
                         </div>
-                        <button onClick={onClose}><X size={24} /></button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleBackupPricingRulesJson}
+                                className="px-3 py-1.5 bg-white border border-amber-300 text-amber-800 hover:bg-amber-100 rounded-lg text-xs font-bold shadow-sm"
+                            >
+                                控え(JSON)を保存
+                            </button>
+                            <button onClick={onClose} disabled={isSaving}><X size={24} /></button>
+                        </div>
+                    </div>
+                    <div className="px-6 py-3 bg-white border-b flex flex-wrap items-center justify-between gap-3 text-xs">
+                        <div className="flex flex-wrap gap-1.5">
+                            <button onClick={() => setOrphanedFilter('all')} className={`px-3 py-1.5 rounded-lg font-bold ${orphanedFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                                すべて ({orphanedDiagnostics.length})
+                            </button>
+                            <button onClick={() => setOrphanedFilter('auto_ready')} className={`px-3 py-1.5 rounded-lg font-bold ${orphanedFilter === 'auto_ready' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>
+                                完全一致・修復可 ({orphanedDiagnostics.filter(d => d.canAutoRelink).length})
+                            </button>
+                            <button onClick={() => setOrphanedFilter('dims_diff')} className={`px-3 py-1.5 rounded-lg font-bold ${orphanedFilter === 'dims_diff' ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}>
+                                寸法のみ不一致 ({orphanedDiagnostics.filter(d => d.reasonType === 'dims_diff').length})
+                            </button>
+                            <button onClick={() => setOrphanedFilter('duplicate')} className={`px-3 py-1.5 rounded-lg font-bold ${orphanedFilter === 'duplicate' ? 'bg-purple-600 text-white' : 'bg-purple-50 text-purple-700 hover:bg-purple-100'}`}>
+                                重複・旧ルール ({orphanedDiagnostics.filter(d => d.reasonType === 'duplicate_live' || d.reasonType === 'duplicate_orphan').length})
+                            </button>
+                            <button onClick={() => setOrphanedFilter('no_match')} className={`px-3 py-1.5 rounded-lg font-bold ${orphanedFilter === 'no_match' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`}>
+                                候補なし・型式違い ({orphanedDiagnostics.filter(d => d.reasonType === 'no_match' || d.reasonType === 'name_only').length})
+                            </button>
+                        </div>
+                        <div className="relative w-64">
+                            <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                            <input
+                                value={orphanedSearchQuery}
+                                onChange={e => setOrphanedSearchQuery(e.target.value)}
+                                placeholder="顧客名・品名・型式で絞り込み..."
+                                className="w-full pl-8 pr-3 py-1.5 border rounded-lg font-bold outline-none focus:border-amber-500"
+                            />
+                        </div>
                     </div>
                     <div className="p-6 overflow-y-auto space-y-3 bg-slate-50 flex-1">
-                        {orphanedRulesList.map(r => (
-                            <div key={r.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2 text-xs">
-                                <div className="flex justify-between items-start gap-4">
-                                    <div className="space-y-1">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{r.customerName}</span>
-                                            <span className="text-slate-600 font-bold">{r.siteName || '全現場共通'}</span>
-                                            <span className="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                                                {r.method === 'fixed_price' ? `固定 ¥${r.value.toLocaleString()}` : (r.method === 'percent_of_list' ? `定価の ${r.value}%` : `原価+${r.value}%`)}
-                                            </span>
+                        {filteredOrphaned.slice(0, 200).map(({ rule: r, reasonType, reasonLabel, suggestedCandidates }) => {
+                            const isSearchingThis = manualSearchRuleId === r.id;
+                            const badgeColor =
+                                reasonType === 'auto_ready' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                reasonType === 'dims_diff' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                (reasonType === 'duplicate_live' || reasonType === 'duplicate_orphan') ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                                'bg-rose-50 text-rose-700 border-rose-200';
+                            return (
+                                <div key={r.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-3 text-xs">
+                                    <div className="flex justify-between items-start gap-4">
+                                        <div className="space-y-1.5">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{r.customerName}</span>
+                                                <span className="text-slate-600 font-bold">{r.siteName || '全現場共通'}</span>
+                                                <span className="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                                                    {r.method === 'fixed_price' ? `固定 ¥${r.value.toLocaleString()}` : (r.method === 'percent_of_list' ? `定価の ${r.value}%` : `原価+${r.value}%`)}
+                                                </span>
+                                                <span className={`font-bold px-2 py-0.5 rounded border ${badgeColor}`}>
+                                                    理由: {reasonLabel}
+                                                </span>
+                                            </div>
+                                            <div className="font-bold text-sm text-slate-800">
+                                                品名: {r.materialName || '(未設定)'} / 分類: {r.category || '(未設定)'} / 型式: {r.model || '(なし)'} / 寸法: {r.dimensions || '(なし)'}
+                                            </div>
+                                            <div className="text-[10px] text-slate-400 font-mono">
+                                                旧資材ID: {r.materialId} {r.updatedAt ? `/ 更新日時: ${new Date(r.updatedAt).toLocaleString('ja-JP')}` : ''}
+                                            </div>
                                         </div>
-                                        <div className="font-bold text-sm text-slate-800">
-                                            品名: {r.materialName || '(未設定)'} / 分類: {r.category || '(未設定)'} / 型式: {r.model || '(なし)'} / 寸法: {r.dimensions || '(なし)'}
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            <button
+                                                onClick={() => {
+                                                    if (isSearchingThis) {
+                                                        setManualSearchRuleId(null);
+                                                        setManualSearchQuery('');
+                                                    } else {
+                                                        setManualSearchRuleId(r.id);
+                                                        setManualSearchQuery(`${r.materialName || ''} ${r.model || ''}`.trim());
+                                                    }
+                                                }}
+                                                disabled={isSaving}
+                                                className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg font-bold flex items-center gap-1"
+                                            >
+                                                <Search size={14} /> {isSearchingThis ? '検索を閉じる' : '資材を検索して手動紐付け'}
+                                            </button>
+                                            <button
+                                                onClick={() => handleDeleteOrphanedRule(r)}
+                                                disabled={isSaving}
+                                                className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg font-bold flex items-center gap-1"
+                                            >
+                                                <Trash2 size={14} /> 削除
+                                            </button>
                                         </div>
-                                        <div className="text-[10px] text-slate-400 font-mono">旧資材ID: {r.materialId}</div>
                                     </div>
-                                    <button
-                                        onClick={() => storage.deletePricingRule(r.id)}
-                                        className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg font-bold shrink-0 flex items-center gap-1"
-                                    >
-                                        <Trash2 size={14} /> 削除
-                                    </button>
+
+                                    {/* 自動検出された候補資材がある場合、ワンクリックで手動紐付け可能 */}
+                                    {suggestedCandidates.length > 0 && (
+                                        <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                                            <div className="text-[11px] font-bold text-slate-600">
+                                                候補の資材（クリックしてこのルールを紐付け）:
+                                            </div>
+                                            <div className="space-y-1 max-h-40 overflow-y-auto">
+                                                {suggestedCandidates.slice(0, 8).map(cand => (
+                                                    <div key={cand.id} className="flex items-center justify-between gap-2 bg-white px-3 py-1.5 rounded border border-slate-200">
+                                                        <div className="truncate font-bold text-slate-700">
+                                                            {cand.name} <span className="text-slate-400">|</span> 分類: {cand.category} <span className="text-slate-400">|</span> 型式: {cand.model || '(なし)'} <span className="text-slate-400">|</span> 寸法: <span className="text-blue-700">{cand.dimensions || '(なし)'}</span> <span className="text-slate-400">(標準: ¥{(cand.sellingPrice || 0).toLocaleString()})</span>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleManualRelinkRule(r, cand)}
+                                                            disabled={isSaving}
+                                                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shrink-0"
+                                                        >
+                                                            この資材に紐付け
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                {suggestedCandidates.length > 8 && (
+                                                    <div className="text-[10px] text-slate-400 pl-1">他 {suggestedCandidates.length - 8} 件の候補（「資材を検索して手動紐付け」から絞り込めます）</div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* 自由キーワード検索による手動紐付けパネル */}
+                                    {isSearchingThis && (
+                                        <div className="bg-blue-50/60 p-3 rounded-lg border border-blue-200 space-y-2">
+                                            <div className="flex items-center gap-2">
+                                                <Search size={14} className="text-blue-600 shrink-0" />
+                                                <input
+                                                    value={manualSearchQuery}
+                                                    onChange={e => setManualSearchQuery(e.target.value)}
+                                                    placeholder="資材マスターから検索（品名・型式・寸法など）..."
+                                                    className="w-full px-3 py-1.5 bg-white border border-blue-300 rounded-lg font-bold outline-none focus:ring-2 focus:ring-blue-400"
+                                                    autoFocus
+                                                />
+                                            </div>
+                                            <div className="space-y-1 max-h-48 overflow-y-auto">
+                                                {manualSearchResults.map(mat => (
+                                                    <div key={mat.id} className="flex items-center justify-between gap-2 bg-white px-3 py-1.5 rounded border border-blue-100">
+                                                        <div className="truncate font-bold text-slate-700">
+                                                            {mat.name} <span className="text-slate-400">|</span> 分類: {mat.category} <span className="text-slate-400">|</span> 型式: {mat.model || '(なし)'} <span className="text-slate-400">|</span> 寸法: <span className="text-blue-700">{mat.dimensions || '(なし)'}</span> <span className="text-slate-400">(標準: ¥{(mat.sellingPrice || 0).toLocaleString()})</span>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleManualRelinkRule(r, mat)}
+                                                            disabled={isSaving}
+                                                            className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold shrink-0"
+                                                        >
+                                                            この資材に紐付け
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                {manualSearchQuery.trim() && manualSearchResults.length === 0 && (
+                                                    <div className="text-center py-3 text-slate-400 font-bold">該当する資材が見つかりません</div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
+                            );
+                        })}
+                        {filteredOrphaned.length > 200 && (
+                            <div className="text-center py-3 text-xs text-slate-500 font-bold">
+                                先頭 200 件を表示中（全 {filteredOrphaned.length} 件 — 上部の検索欄またはフィルタで絞り込めます）
                             </div>
-                        ))}
-                        {orphanedRulesList.length === 0 && (
-                            <div className="text-center py-12 text-slate-400 font-bold">不整合な単価ルールはありません。</div>
+                        )}
+                        {filteredOrphaned.length === 0 && (
+                            <div className="text-center py-12 text-slate-400 font-bold">条件に一致する不整合単価ルールはありません。</div>
                         )}
                     </div>
                 </div>
@@ -399,41 +721,59 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
     }
 
     if (view === 'list') {
+        const bannerStyle = !isDiagnosticReady
+            ? 'bg-slate-100 border-slate-300 text-slate-700'
+            : orphanedRulesCount > 0
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-emerald-50 border-emerald-200 text-emerald-900';
+        const iconStyle = !isDiagnosticReady
+            ? 'text-slate-500'
+            : orphanedRulesCount > 0
+                ? 'text-amber-600'
+                : 'text-emerald-600';
+
         return (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                    <div className="p-6 border-b flex justify-between items-center"><h2 className="text-xl font-bold flex items-center gap-3"><Users size={24} className="text-blue-600" /> 顧客設定・単価管理</h2><button onClick={onClose}><X size={24} /></button></div>
+                    <div className="p-6 border-b flex justify-between items-center"><h2 className="text-xl font-bold flex items-center gap-3"><Users size={24} className="text-blue-600" /> 顧客設定・単価管理</h2><button onClick={onClose} disabled={isSaving}><X size={24} /></button></div>
                     <div className="p-8 bg-slate-50 flex flex-col gap-8 overflow-y-auto">
                         {/* No.2: 単価ルールの背番号（資材ID）不整合診断・一括自動修復バナー */}
-                        <div className={`p-4 rounded-xl border flex items-center justify-between gap-4 ${orphanedRulesCount > 0 ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`}>
+                        <div className={`p-4 rounded-xl border flex items-center justify-between gap-4 ${bannerStyle}`}>
                             <div className="flex items-center gap-3">
-                                <AlertCircle size={24} className={orphanedRulesCount > 0 ? 'text-amber-600' : 'text-emerald-600'} />
+                                <AlertCircle size={24} className={iconStyle} />
                                 <div>
                                     <h4 className="font-bold text-sm">
-                                        {orphanedRulesCount > 0 ? `単価ルールの資材ID不整合: ${orphanedRulesCount}件 検出` : '単価ルールの資材ID照合: 正常 (不整合 0件)'}
+                                        {!isDiagnosticReady
+                                            ? '単価ルールの資材ID照合: 判定前（資材マスター読み込み中...）'
+                                            : orphanedRulesCount > 0
+                                                ? `単価ルールの資材ID不整合: ${orphanedRulesCount}件 検出`
+                                                : '単価ルールの資材ID照合: 正常 (不整合 0件)'}
                                     </h4>
                                     <p className="text-xs opacity-80 mt-0.5">
-                                        {orphanedRulesCount > 0
-                                            ? '実在しない資材IDを持つルールを自動検索し、正しい資材へ再紐付け・正常化します。'
-                                            : 'すべての単価ルールが実在する資材ID（背番号）と正しく紐付いています。'}
+                                        {!isDiagnosticReady
+                                            ? '資材マスターの読み込み完了後に、単価ルールの資材ID（背番号）の整合性を判定します。'
+                                            : orphanedRulesCount > 0
+                                                ? '4項目が完全一致するルール（最新優先）を元の更新日時を保ったまま再紐付けし、残りは不整合一覧で手動紐付け・整理できます。'
+                                                : 'すべての単価ルールが実在する資材ID（背番号）と正しく紐付いています。'}
                                     </p>
                                 </div>
                             </div>
                             <div className="flex gap-2 shrink-0">
-                                {orphanedRulesCount > 0 && (
+                                {isDiagnosticReady && orphanedRulesCount > 0 && (
                                     <button
                                         onClick={() => setView('orphaned')}
-                                        className="px-3 py-2 rounded-lg text-xs font-bold bg-white border border-amber-300 text-amber-800 hover:bg-amber-100 transition-all shadow-sm"
+                                        disabled={isSaving}
+                                        className="px-3 py-2 rounded-lg text-xs font-bold bg-white border border-amber-300 text-amber-800 hover:bg-amber-100 transition-all shadow-sm disabled:opacity-40"
                                     >
                                         不整合一覧を確認
                                     </button>
                                 )}
                                 <button
                                     onClick={handleRepairPricingRuleIds}
-                                    disabled={items.length === 0 || isSaving}
-                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${orphanedRulesCount > 0 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                                    disabled={!isDiagnosticReady || isSaving}
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${!isDiagnosticReady ? 'bg-slate-400 text-white' : orphanedRulesCount > 0 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
                                 >
-                                    {orphanedRulesCount > 0 ? '一括照合・修復を実行' : '再診断を実行'}
+                                    {!isDiagnosticReady ? '判定準備中...' : orphanedRulesCount > 0 ? '一括照合・修復を実行' : '再診断を実行'}
                                 </button>
                             </div>
                         </div>

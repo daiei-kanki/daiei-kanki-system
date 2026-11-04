@@ -322,9 +322,10 @@ export const addPricingRule = async (r: Omit<PricingRule, 'id'>) => {
     const docRef = await addDoc(collection(db, COLLECTIONS.RULES), cleanRule);
     return docRef.id;
 };
-export const updatePricingRule = async (id: string, r: Partial<PricingRule>) => {
+export const updatePricingRule = async (id: string, r: Partial<PricingRule>, options?: { preserveTimestamp?: boolean }) => {
     const docRef = doc(db, COLLECTIONS.RULES, id);
-    await updateDoc(docRef, { ...r, updatedAt: Date.now() });
+    const payload = options?.preserveTimestamp ? { ...r } : { ...r, updatedAt: Date.now() };
+    await updateDoc(docRef, payload);
 };
 export const deletePricingRule = (id: string) => deleteDoc(doc(db, COLLECTIONS.RULES, id));
 
