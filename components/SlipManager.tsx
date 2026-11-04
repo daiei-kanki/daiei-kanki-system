@@ -704,7 +704,8 @@ const CartItemRow = React.memo(({
     handleRegisterToMaster,
     onDelete,
     isProvEdit,
-    onPreviewSourceSlips
+    onPreviewSourceSlips,
+    liveAvailableQuantity
 }: {
     item: SlipItem,
     index: number,
@@ -713,7 +714,8 @@ const CartItemRow = React.memo(({
     handleRegisterToMaster: (item: SlipItem) => void,
     onDelete: (index: number) => void,
     isProvEdit?: boolean,
-    onPreviewSourceSlips?: (slipNos: string[]) => void
+    onPreviewSourceSlips?: (slipNos: string[]) => void,
+    liveAvailableQuantity?: number
 }) => {
     const isReturn = activeMode === 'return';
     const [isNoteOpen, setIsNoteOpen] = useState(!!item.slipItemNote);
@@ -727,7 +729,7 @@ const CartItemRow = React.memo(({
 
     const historyInfo = (item as any).historyMonth ? {
         month: (item as any).historyMonth,
-        available: (item as any).availableQuantity,
+        available: liveAvailableQuantity !== undefined ? liveAvailableQuantity : (item as any).availableQuantity,
         sourceSlipNos: ((item as any).sourceSlipNos as string[] | undefined) || (item.sourceSlipNo ? [item.sourceSlipNo] : [])
     } : null;
 
@@ -1315,7 +1317,8 @@ export const SlipManager: React.FC<{
                 s.items.forEach(item => {
                     const deliveredQty = item.deliveredQuantity !== undefined ? item.deliveredQuantity : (item.quantity || 0);
                     if (deliveredQty <= 0) return;
-                    const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
+                    // 先売上済等で0円納品された行(appliedPrice === 0)も標準売価へ置き換えず0円として保持する
+                    const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice !== null) ? item.appliedPrice : (item.sellingPrice || 0);
                     const itemMonth = item.date?.slice(0, 7) || month;
                     const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${itemMonth}`;
                     if (!historyMap.has(key)) {
@@ -1340,7 +1343,7 @@ export const SlipManager: React.FC<{
                 s.items.forEach(item => {
                     const retQty = Math.abs(item.quantity);
                     if (retQty <= 0) return;
-                    const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice > 0) ? item.appliedPrice : (item.sellingPrice || 0);
+                    const itemPrice = (item.appliedPrice !== undefined && item.appliedPrice !== null) ? item.appliedPrice : (item.sellingPrice || 0);
                     const targetMonth = (item as any).historyMonth || item.date?.slice(0, 7) || month;
                     const key = `${item.name}__${item.model || ''}__${item.dimensions || ''}__${itemPrice}__${targetMonth}`;
                     if (historyMap.has(key)) {
@@ -1374,9 +1377,9 @@ export const SlipManager: React.FC<{
         });
 
         return Array.from(historyMap.values())
-            .map((entry, idx) => {
-                const historyKey = `hist__${entry.name}__${entry.model}__${entry.dims}__${entry.price}__${entry.month}__${idx}`;
-                const origId = (entry.item as any).originalMaterialId || (entry.item.id && !entry.item.id.startsWith('hist__') ? entry.item.id.split('__')[0] : undefined);
+            .map((entry) => {
+                const historyKey = `hist__${entry.name}__${entry.model}__${entry.dims}__${entry.price}__${entry.month}`;
+                const origId = (entry.item as any).originalMaterialId || (entry.item.id && entry.item.id !== 'hist' && !entry.item.id.startsWith('hist__') ? entry.item.id.split('__')[0] : undefined);
                 return {
                     ...entry.item,
                     id: historyKey,
@@ -1601,9 +1604,26 @@ export const SlipManager: React.FC<{
             if (activeMode === 'return') {
                 const returnTotalsByKey = new Map<string, { name: string; totalQty: number; avail?: number }>();
                 processedItems.forEach(i => {
-                    const k = (i as any).historyKey || `${i.name}__${i.model || ''}__${i.dimensions || ''}__${i.appliedPrice || 0}__${(i as any).historyMonth || ''}`;
-                    const matchedHist = siteHistoryItems.find(h => h.historyKey === (i as any).historyKey || (h.name === i.name && (h.model || '') === (i.model || '') && (h.dimensions || '') === (i.dimensions || '')));
-                    const avail = (i as any).availableQuantity !== undefined ? (i as any).availableQuantity : matchedHist?.availableQuantity;
+                    const rawHistKey = typeof (i as any).historyKey === 'string' ? (i as any).historyKey.replace(/__\d+$/, '') : '';
+                    const itemPrice = i.appliedPrice ?? 0;
+                    const exactHist = siteHistoryItems.find(h =>
+                        (rawHistKey && h.historyKey === rawHistKey) ||
+                        ((i as any).historyMonth && h.name === i.name && (h.model || '') === (i.model || '') && (h.dimensions || '') === (i.dimensions || '') && h.appliedPrice === itemPrice && h.historyMonth === (i as any).historyMonth)
+                    );
+                    const fallbackHist = exactHist || siteHistoryItems.find(h =>
+                        h.name === i.name && (h.model || '') === (i.model || '') && (h.dimensions || '') === (i.dimensions || '') && h.appliedPrice === itemPrice
+                    ) || siteHistoryItems.find(h =>
+                        h.name === i.name && (h.model || '') === (i.model || '') && (h.dimensions || '') === (i.dimensions || '')
+                    );
+                    const matchedHist = exactHist || fallbackHist;
+                    // 候補行と自由入力行で同一資材を分けて入力した場合も同一の履歴枠キーに合算する
+                    const k = matchedHist
+                        ? matchedHist.historyKey
+                        : (rawHistKey || `${i.name}__${i.model || ''}__${i.dimensions || ''}__${itemPrice}__${(i as any).historyMonth || ''}`);
+                    // 伝票修正時も含め、常に最新の納品残(siteHistoryItemsのavailableQuantity)を最優先で比較する
+                    const avail = matchedHist
+                        ? matchedHist.availableQuantity
+                        : ((i as any).historyKey || (i as any).historyMonth ? 0 : undefined);
                     const prev = returnTotalsByKey.get(k);
                     if (prev) {
                         prev.totalQty += Math.abs(i.quantity);
@@ -2887,19 +2907,34 @@ export const SlipManager: React.FC<{
                                                                 ref={provided.innerRef}
                                                                 className="divide-y"
                                                             >
-                                                                {cart.map((item, idx) => (
-                                                                    <CartItemRow
-                                                                        key={item.id}
-                                                                        item={item}
-                                                                        index={idx}
-                                                                        activeMode={activeMode}
-                                                                        onUpdateCart={onUpdateCart}
-                                                                        handleRegisterToMaster={handleRegisterToMaster}
-                                                                        onDelete={handleDeleteFromCart}
-                                                                        isProvEdit={editingSlipId ? archivedSlips.find(s => s.id === editingSlipId)?.type === 'provisional' : false}
-                                                                        onPreviewSourceSlips={handlePreviewSourceSlips}
-                                                                    />
-                                                                ))}
+                                                                {cart.map((item, idx) => {
+                                                                    let liveAvail: number | undefined = undefined;
+                                                                    if (activeMode === 'return' && ((item as any).historyMonth || (item as any).historyKey)) {
+                                                                        const rawHistKey = typeof (item as any).historyKey === 'string' ? (item as any).historyKey.replace(/__\d+$/, '') : '';
+                                                                        const itemPrice = item.appliedPrice ?? 0;
+                                                                        const matched = siteHistoryItems.find(h =>
+                                                                            (rawHistKey && h.historyKey === rawHistKey) ||
+                                                                            ((item as any).historyMonth && h.name === item.name && (h.model || '') === (item.model || '') && (h.dimensions || '') === (item.dimensions || '') && h.appliedPrice === itemPrice && h.historyMonth === (item as any).historyMonth)
+                                                                        ) || siteHistoryItems.find(h =>
+                                                                            h.name === item.name && (h.model || '') === (item.model || '') && (h.dimensions || '') === (item.dimensions || '')
+                                                                        );
+                                                                        liveAvail = matched ? matched.availableQuantity : 0;
+                                                                    }
+                                                                    return (
+                                                                        <CartItemRow
+                                                                            key={item.id}
+                                                                            item={item}
+                                                                            index={idx}
+                                                                            activeMode={activeMode}
+                                                                            onUpdateCart={onUpdateCart}
+                                                                            handleRegisterToMaster={handleRegisterToMaster}
+                                                                            onDelete={handleDeleteFromCart}
+                                                                            isProvEdit={editingSlipId ? archivedSlips.find(s => s.id === editingSlipId)?.type === 'provisional' : false}
+                                                                            onPreviewSourceSlips={handlePreviewSourceSlips}
+                                                                            liveAvailableQuantity={liveAvail}
+                                                                        />
+                                                                    );
+                                                                })}
                                                                 {provided.placeholder}
                                                             </tbody>
                                                         )}
