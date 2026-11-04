@@ -21,13 +21,18 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
     onClose
 }) => {
     const [searchQuery, setSearchQuery] = useState('');
+    const [displayLimit, setDisplayLimit] = useState(100);
     const [selectedItem, setSelectedItem] = useState<MaterialItem | null>(null);
 
-    // Filter items based on search (No.15: 初期表示全件8104件描画によるフリーズ防止)
-    const filteredItems = useMemo(() => {
+    // Filter items based on search (No.15: 初期表示全件8104件描画によるフリーズ防止＋件数表示・続き読み込み対応)
+    const allMatchedItems = useMemo(() => {
         if (!searchQuery.trim()) return [];
-        return filterAndSortItems(items, searchQuery).slice(0, 100);
+        return filterAndSortItems(items, searchQuery);
     }, [items, searchQuery]);
+
+    const filteredItems = useMemo(() => {
+        return allMatchedItems.slice(0, displayLimit);
+    }, [allMatchedItems, displayLimit]);
 
     return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
@@ -73,7 +78,7 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
                         <input
                             type="text"
                             value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onChange={(e) => { setSearchQuery(e.target.value); setDisplayLimit(100); }}
                             placeholder="品名・分類・型式・寸法・規格サイズ・メーカー・棚番号で検索..."
                             className="w-full pl-10 sm:pl-12 pr-4 py-2.5 sm:py-3 bg-white border-2 border-slate-200 rounded-2xl text-sm sm:text-base font-bold outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
                             autoFocus
@@ -134,6 +139,17 @@ export const MaterialQuickSearch: React.FC<MaterialQuickSearchProps> = ({
                                 </button>
                             );
                         })
+                    )}
+                    {allMatchedItems.length > filteredItems.length && (
+                        <div className="pt-2 pb-4 text-center">
+                            <button
+                                type="button"
+                                onClick={() => setDisplayLimit(prev => prev + 100)}
+                                className="px-6 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black text-xs rounded-xl border border-indigo-200 transition-colors"
+                            >
+                                さらに100件を表示（全 {allMatchedItems.length.toLocaleString()} 件中 {filteredItems.length.toLocaleString()} 件表示中 / 残り {(allMatchedItems.length - filteredItems.length).toLocaleString()} 件）
+                            </button>
+                        </div>
                     )}
                 </div>
 
