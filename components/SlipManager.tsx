@@ -1849,12 +1849,25 @@ export const SlipManager: React.FC<{
             } as Slip);
         }
 
+        // 現場名から一意で読みやすい伝票番号用コードを生成（先頭4文字の重複を防止）
+        const buildSiteSlipCode = (name: string) => {
+            const clean = name.replace(/\s+/g, '');
+            if (clean.length <= 16) return clean;
+            let h = 2166136261;
+            for (let idx = 0; idx < clean.length; idx++) {
+                h ^= clean.charCodeAt(idx);
+                h = Math.imul(h, 16777619);
+            }
+            const hashStr = (h >>> 0).toString(36).toUpperCase().slice(0, 4);
+            return `${clean.slice(0, 8)}-${clean.slice(-4)}-${hashStr}`;
+        };
+
         siteItemsMap.forEach((items, sName) => {
             if (targetSite && formatSiteName(targetSite) !== sName) return;
             const sItems = Array.from(items.values()).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
             const sNet = sItems.reduce((acc, b) => acc + ((b.appliedPrice || 0) * (b.deliveredQuantity || 0)), 0);
             const sTax = Math.round(sNet * 0.1);
-            const siteSlipNo = `DET-${targetMonth.replace('-', '')}-${sName.substring(0, 4)}`;
+            const siteSlipNo = `DET-${targetMonth.replace('-', '')}-${buildSiteSlipCode(sName)}`;
             
             const baseMeta: any = { customerName: cName, constructionName: sName, totalAmount: sNet, taxAmount: sTax, grandTotal: sNet + sTax, date: end, orderDate: start, createdAt: Date.now(), isClosed: true, slipNumber: siteSlipNo };
             allDocs.push({ ...baseMeta, id: 'site-cover-' + sName, type: 'cover' });
