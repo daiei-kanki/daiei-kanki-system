@@ -160,15 +160,75 @@ export const bulkSetCategory = async (ids: string[], newCategory: string) => {
 };
 
 export const importMaterials = async (items: Partial<Material>[]) => {
+    // 既存資材を取得し、ID一致または「品名＋型式＋寸法＋分類」一致で上書き更新（upsert）する
+    const existingSnap = await getDocs(collection(db, COLLECTIONS.MATERIALS));
+    const existingById = new Map<string, Material>();
+    const existingByKey = new Map<string, Material>();
+
+    const makeKey = (m: Partial<Material>) => {
+        const name = (m.name || '').trim();
+        const model = (m.model || '').trim();
+        const dims = (m.dimensions || '').trim();
+        const cat = (m.category || '消耗品・雑材').trim();
+        if (!name || (!model && !dims)) return null;
+        return [name, model, dims, cat].join('||');
+    };
+
+    existingSnap.docs.forEach(d => {
+        const mat = { ...(d.data() as any), id: d.id } as Material;
+        existingById.set(mat.id, mat);
+        const k = makeKey(mat);
+        if (k && !existingByKey.has(k)) {
+            existingByKey.set(k, mat);
+        }
+    });
+
+    const operations: { ref: any; data: any; merge: boolean }[] = [];
+    const now = Date.now();
+
+    items.forEach(item => {
+        const rawId = typeof item.id === 'string' ? item.id.trim() : '';
+        const k = makeKey(item);
+        const matched = (rawId && existingById.get(rawId)) || (k ? existingByKey.get(k) : undefined);
+
+        const { id: _, ...rawData } = item as any;
+        const cleanData = removeUndefined(rawData);
+
+        if (matched) {
+            // 既存資材に実在庫(>0)があり、取込側の数量が未指定または0の場合は実在庫を保護する
+            const existingQty = matched.quantity || 0;
+            const incomingQty = cleanData.quantity;
+            const preservedQty = (existingQty > 0 && (incomingQty === undefined || incomingQty === 0))
+                ? existingQty
+                : (incomingQty ?? existingQty);
+
+            const ref = doc(db, COLLECTIONS.MATERIALS, matched.id);
+            operations.push({
+                ref,
+                data: { ...cleanData, quantity: preservedQty, updatedAt: now },
+                merge: true
+            });
+        } else {
+            const ref = doc(collection(db, COLLECTIONS.MATERIALS));
+            operations.push({
+                ref,
+                data: { quantity: 0, ...cleanData, updatedAt: now },
+                merge: false
+            });
+        }
+    });
+
     // Firestoreのバッチ書き込みは500件が上限のため、チャンクに分割して処理する
     const CHUNK_SIZE = 499;
-    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
-        const chunk = items.slice(i, i + CHUNK_SIZE);
+    for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
+        const chunk = operations.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
-        chunk.forEach(item => {
-            const { id: _, ...data } = item as any;
-            const ref = doc(collection(db, COLLECTIONS.MATERIALS));
-            batch.set(ref, { ...data, updatedAt: Date.now() });
+        chunk.forEach(op => {
+            if (op.merge) {
+                batch.set(op.ref, op.data, { merge: true });
+            } else {
+                batch.set(op.ref, op.data);
+            }
         });
         await batch.commit();
     }
@@ -345,23 +405,82 @@ export const deduplicateMaterials = async (items: Material[]): Promise<number> =
         groups.get(key)!.push(item);
     }
 
-    // 重複があるグループから「最新以外」のIDを収集
+    // 重複があるグループから「実在庫あり優先 → updatedAt最新優先」で残す1件を決め、削除対象ID→残存IDの対応を記録
     const idsToDelete: string[] = [];
+    const deletedToKeeperMap = new Map<string, string>();
+    const keeperStockUpdates: { id: string; updates: Partial<Material> }[] = [];
+
     for (const group of groups.values()) {
         if (group.length <= 1) continue;
-        // updatedAt が大きい（新しい）順に並べ、先頭1件を残して残りを削除対象に
-        group.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-        idsToDelete.push(...group.slice(1).map(i => i.id));
+        // 1. 実在庫(quantity > 0)がある行を最優先で残す（在庫0の直近インポート行で実在庫行が消えるのを防ぐ）
+        // 2. 同じ在庫有無なら updatedAt が新しい順
+        const byNewest = [...group].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        const newestItem = byNewest[0];
+
+        group.sort((a, b) => {
+            const hasStockA = (a.quantity || 0) > 0 ? 1 : 0;
+            const hasStockB = (b.quantity || 0) > 0 ? 1 : 0;
+            if (hasStockA !== hasStockB) return hasStockB - hasStockA;
+            if ((b.quantity || 0) !== (a.quantity || 0)) return (b.quantity || 0) - (a.quantity || 0);
+            return (b.updatedAt || 0) - (a.updatedAt || 0);
+        });
+
+        const keeper = group[0];
+        const removed = group.slice(1);
+
+        // もし削除される新しい行に最新の価格が入っており、残す行が古い実在庫行だった場合は最新価格も引き継ぐ
+        const maxQty = Math.max(...group.map(g => g.quantity || 0));
+        const keeperUpdates: Partial<Material> = {};
+        if ((keeper.quantity || 0) < maxQty) {
+            keeperUpdates.quantity = maxQty;
+        }
+        if (newestItem.id !== keeper.id) {
+            if (newestItem.listPrice && newestItem.listPrice > 0) keeperUpdates.listPrice = newestItem.listPrice;
+            if (newestItem.sellingPrice && newestItem.sellingPrice > 0) keeperUpdates.sellingPrice = newestItem.sellingPrice;
+            if (newestItem.costPrice && newestItem.costPrice > 0) keeperUpdates.costPrice = newestItem.costPrice;
+        }
+        if (Object.keys(keeperUpdates).length > 0) {
+            keeperStockUpdates.push({ id: keeper.id, updates: keeperUpdates });
+        }
+
+        for (const r of removed) {
+            idsToDelete.push(r.id);
+            deletedToKeeperMap.set(r.id, keeper.id);
+        }
     }
 
     if (idsToDelete.length === 0) return 0;
 
-    // 500件ずつバッチ削除
-    const CHUNK = 499;
-    for (let i = 0; i < idsToDelete.length; i += CHUNK) {
-        const chunk = idsToDelete.slice(i, i + CHUNK);
+    // 削除される資材IDを参照していた顧客別単価ルール(pricingRules.materialId)を残存IDへ引き継ぐ
+    const rulesSnap = await getDocs(collection(db, COLLECTIONS.RULES));
+    const ruleRelinks: { ruleId: string; newMaterialId: string }[] = [];
+    rulesSnap.docs.forEach(d => {
+        const rData = d.data() as PricingRule;
+        if (rData.materialId && deletedToKeeperMap.has(rData.materialId)) {
+            ruleRelinks.push({
+                ruleId: d.id,
+                newMaterialId: deletedToKeeperMap.get(rData.materialId)!
+            });
+        }
+    });
+
+    // バッチ操作を組み立てて500件未満ずつコミット
+    const ops: ((batch: any) => void)[] = [];
+    keeperStockUpdates.forEach(u => {
+        ops.push(b => b.update(doc(db, COLLECTIONS.MATERIALS, u.id), { ...u.updates, updatedAt: Date.now() }));
+    });
+    ruleRelinks.forEach(rl => {
+        ops.push(b => b.update(doc(db, COLLECTIONS.RULES, rl.ruleId), { materialId: rl.newMaterialId, updatedAt: Date.now() }));
+    });
+    idsToDelete.forEach(id => {
+        ops.push(b => b.delete(doc(db, COLLECTIONS.MATERIALS, id)));
+    });
+
+    const CHUNK = 450;
+    for (let i = 0; i < ops.length; i += CHUNK) {
+        const chunk = ops.slice(i, i + CHUNK);
         const batch = writeBatch(db);
-        chunk.forEach(id => batch.delete(doc(db, COLLECTIONS.MATERIALS, id)));
+        chunk.forEach(fn => fn(batch));
         await batch.commit();
     }
 

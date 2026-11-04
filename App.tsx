@@ -808,27 +808,38 @@ const App: React.FC = () => {
                                         if (!groups.has(key)) groups.set(key, []);
                                         groups.get(key)!.push(item);
                                     }
-                                    const toDelete: typeof items = [];
+                                    const toDeletePairs: { removed: MaterialItem; keeper: MaterialItem }[] = [];
                                     groups.forEach(group => {
                                         if (group.length <= 1) return;
-                                        const sorted = [...group].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-                                        toDelete.push(...sorted.slice(1));
+                                        const sorted = [...group].sort((a, b) => {
+                                            const hasStockA = (a.quantity || 0) > 0 ? 1 : 0;
+                                            const hasStockB = (b.quantity || 0) > 0 ? 1 : 0;
+                                            if (hasStockA !== hasStockB) return hasStockB - hasStockA;
+                                            if ((b.quantity || 0) !== (a.quantity || 0)) return (b.quantity || 0) - (a.quantity || 0);
+                                            return (b.updatedAt || 0) - (a.updatedAt || 0);
+                                        });
+                                        const keeper = sorted[0];
+                                        sorted.slice(1).forEach(removed => {
+                                            toDeletePairs.push({ removed, keeper });
+                                        });
                                     });
+
+                                    const toDelete = toDeletePairs.map(p => p.removed);
 
                                     if (toDelete.length === 0) {
                                         return alert('重複している資材は見つかりませんでした。');
                                     }
 
-                                    // ---- 削除対象のプレビュー表示 ----
-                                    const preview = toDelete.slice(0, 20).map(i =>
-                                        `・${i.name} [${i.model || ''}] ${i.dimensions || ''} (${i.category})`
+                                    // ---- 削除対象のプレビュー表示（在庫差を明示） ----
+                                    const preview = toDeletePairs.slice(0, 20).map(({ removed: i, keeper }) =>
+                                        `・${i.name} [${i.model || ''}] ${i.dimensions || ''} (削除側在庫:${i.quantity || 0} → 残存側在庫:${Math.max(keeper.quantity || 0, i.quantity || 0)})`
                                     ).join('\n');
                                     const moreCount = toDelete.length > 20 ? `\n… 他 ${toDelete.length - 20} 件` : '';
 
                                     const confirmed = window.confirm(
                                         `【重複除去】${toDelete.length} 件を削除しようとしています。\n\n` +
-                                        `【削除対象（各グループの古い方）】\n${preview}${moreCount}\n\n` +
-                                        `【重複判定の条件】\n「品名＋型式＋寸法＋カテゴリ」が完全一致するもの\n→ 更新日が古い方を削除します\n\n` +
+                                        `【削除対象（実在庫あり優先で残し、在庫0・古い重複を削除）】\n${preview}${moreCount}\n\n` +
+                                        `【重複判定の条件】\n「品名＋型式＋寸法＋カテゴリ」が完全一致するもの\n→ 実在庫がある方を優先して残し、紐づく顧客別単価ルール(materialId)も残存側へ自動引き継ぎします\n\n` +
                                         `⚠️ この操作は取り消せません。\n本当によろしいですか？`
                                     );
                                     if (!confirmed) return;
