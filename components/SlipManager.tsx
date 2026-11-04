@@ -1897,8 +1897,7 @@ export const SlipManager: React.FC<{
                 const itemEffDate = s.type === 'return' ? s.date : (i.date || s.date);
                 if (itemEffDate && (itemEffDate < start || itemEffDate > end)) return;
                 
-                // 顧客ルールによる単価の再適用（伝票保存時の単価ミスをここで自動修正する）
-                // ただし、備考がある場合や「特値」と明記されている場合は手動設定を優先
+                // 伝票保存時に確定・凍結された明細の適用単価(appliedPrice)をそのまま使用する（過去伝票の金額変動を防止）
                 const price = i.appliedPrice || 0;
 
                 const isReturning = s.type === 'return' || qty < 0;
