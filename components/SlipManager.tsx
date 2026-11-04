@@ -703,7 +703,8 @@ const CartItemRow = React.memo(({
     onUpdateCart,
     handleRegisterToMaster,
     onDelete,
-    isProvEdit
+    isProvEdit,
+    onPreviewSourceSlips
 }: {
     item: SlipItem,
     index: number,
@@ -711,7 +712,8 @@ const CartItemRow = React.memo(({
     onUpdateCart: React.Dispatch<React.SetStateAction<SlipItem[]>>,
     handleRegisterToMaster: (item: SlipItem) => void,
     onDelete: (index: number) => void,
-    isProvEdit?: boolean
+    isProvEdit?: boolean,
+    onPreviewSourceSlips?: (slipNos: string[]) => void
 }) => {
     const isReturn = activeMode === 'return';
     const [isNoteOpen, setIsNoteOpen] = useState(!!item.slipItemNote);
@@ -725,7 +727,8 @@ const CartItemRow = React.memo(({
 
     const historyInfo = (item as any).historyMonth ? {
         month: (item as any).historyMonth,
-        available: (item as any).availableQuantity
+        available: (item as any).availableQuantity,
+        sourceSlipNos: ((item as any).sourceSlipNos as string[] | undefined) || (item.sourceSlipNo ? [item.sourceSlipNo] : [])
     } : null;
 
     const isExceeding = isReturn && historyInfo && Math.abs(item.quantity) > historyInfo.available;
@@ -777,13 +780,30 @@ const CartItemRow = React.memo(({
                             <div className="flex items-center gap-1 mt-1">
                                 {isReturn ? (
                                     historyInfo ? (
-                                        <div className="flex gap-1">
+                                        <div className="flex flex-wrap items-center gap-1">
                                             <span className="px-1.5 py-0.5 bg-rose-100 text-[8px] font-black text-rose-600 rounded border border-rose-200 uppercase tracking-tighter">
                                                 {historyInfo.month} 納品分
                                             </span>
                                             <span className={`px-1.5 py-0.5 ${isExceeding ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-400'} text-[8px] font-black rounded border border-slate-200`}>
                                                 返品可能残: {historyInfo.available}
                                             </span>
+                                            {historyInfo.sourceSlipNos && historyInfo.sourceSlipNos.length > 0 && (
+                                                <>
+                                                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[8px] font-mono font-bold rounded border border-slate-200">
+                                                        元伝票: {historyInfo.sourceSlipNos.slice(0, 2).join(', ')}{historyInfo.sourceSlipNos.length > 2 ? ` 他${historyInfo.sourceSlipNos.length - 2}件` : ''}
+                                                    </span>
+                                                    {onPreviewSourceSlips && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onPreviewSourceSlips(historyInfo.sourceSlipNos!)}
+                                                            className="px-1.5 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-600 text-[8px] font-black rounded border border-blue-200 flex items-center gap-0.5 transition-colors"
+                                                            title="納品時の仮納品書・納品書をプレビュー確認"
+                                                        >
+                                                            <FileText size={9} /> 納品書確認
+                                                        </button>
+                                                    )}
+                                                </>
+                                            )}
                                         </div>
                                     ) : (
                                         <span className="px-1.5 py-0.5 bg-amber-50 text-[8px] font-black text-amber-600 rounded border border-amber-200">履歴外アイテム</span>
@@ -1027,6 +1047,12 @@ export const SlipManager: React.FC<{
     const [forceDisplayPrice, setForceDisplayPrice] = useState(false);
 
     useEffect(() => {
+        if (rawPrintingSlips.length === 0) {
+            setForceDisplayPrice(false);
+        }
+    }, [rawPrintingSlips.length]);
+
+    useEffect(() => {
         const handleResize = () => {
             const availableWidth = window.innerWidth - 64;
             const availableHeight = window.innerHeight - 100;
@@ -1244,7 +1270,7 @@ export const SlipManager: React.FC<{
         
         const historyMap = new Map<string, { 
             name: string; model: string; dims: string; price: number; month: string; 
-            totalDelivered: number; totalReturned: number; item: SlipItem 
+            totalDelivered: number; totalReturned: number; item: SlipItem; sourceSlipNos: Set<string> 
         }>();
 
         const normalizedCustomer = normalizeForSearch(customerName);
@@ -1271,11 +1297,13 @@ export const SlipManager: React.FC<{
                         historyMap.set(key, { 
                             name: item.name, model: item.model || '', dims: item.dimensions || '', 
                             price: itemPrice, month: itemMonth, 
-                            totalDelivered: 0, totalReturned: 0, item 
+                            totalDelivered: 0, totalReturned: 0, item, sourceSlipNos: new Set<string>() 
                         });
                     }
                     const entry = historyMap.get(key)!;
                     entry.totalDelivered += deliveredQty;
+                    const sNo = item.sourceSlipNo || s.slipNumber;
+                    if (sNo) entry.sourceSlipNos.add(sNo);
                 });
             }
         });
@@ -1335,6 +1363,7 @@ export const SlipManager: React.FC<{
                     historyMonth: entry.month,
                     historySiteName: normalizedSiteName,
                     historyCustomerName: normalizedCustomer,
+                    sourceSlipNos: Array.from(entry.sourceSlipNos),
                     appliedPrice: entry.price
                 };
             })
@@ -1440,6 +1469,21 @@ export const SlipManager: React.FC<{
     const handleDeleteFromCart = useCallback((index: number) => {
         onUpdateCart(prev => prev.filter((_, i) => i !== index));
     }, [onUpdateCart]);
+
+    const handlePreviewSourceSlips = useCallback((slipNos: string[]) => {
+        if (!slipNos || slipNos.length === 0) return;
+        const targetSlips = slips.filter(s =>
+            (s.type === 'provisional' || s.type === 'delivery') &&
+            s.slipNumber &&
+            slipNos.includes(s.slipNumber)
+        );
+        if (targetSlips.length === 0) {
+            alert(`対象の納品伝票 (${slipNos.join(', ')}) が見つかりませんでした。`);
+            return;
+        }
+        setForceDisplayPrice(false);
+        setPrintingSlips(targetSlips.flatMap(s => splitSlipIntoPages(s)));
+    }, [slips]);
 
     const handleDragEnd = useCallback((result: DropResult) => {
         if (!result.destination) return;
@@ -1598,6 +1642,14 @@ export const SlipManager: React.FC<{
                     }
                     setEditingSlipId(null);
                     onClearCart();
+                    setSiteName('');
+                    setOrderingPerson('');
+                    setCustomerOrderNumber('');
+                    setNote('');
+                    setTime('none');
+                    setDest('none');
+                    setSlipDate(getTodayJSTString());
+                    setOrderDate(getTodayJSTString());
                     handleTabChange(preEditTab);
                 } catch (e: any) {
                     alert(`保存に失敗しました: ${e?.message || '不明なエラー'}`);
@@ -1621,8 +1673,17 @@ export const SlipManager: React.FC<{
                     await storage.deleteSlip(reslipToDeleteId);
                     setReslipToDeleteId(null);
                 }
+                setForceDisplayPrice(false);
                 setPrintingSlips(splitSlipIntoPages({ ...newSlip, id: newId } as Slip));
                 onClearCart();
+                setSiteName('');
+                setOrderingPerson('');
+                setCustomerOrderNumber('');
+                setNote('');
+                setTime('none');
+                setDest('none');
+                setSlipDate(getTodayJSTString());
+                setOrderDate(getTodayJSTString());
                 handleTabChange(activeMode === 'return' ? 'history' : 'pending');
             }
         } finally {
@@ -2335,7 +2396,7 @@ export const SlipManager: React.FC<{
                     <div className="print-preview-screen fixed inset-0 z-[300] bg-slate-900 overflow-auto flex flex-col items-center">
                         <div className="w-full sticky top-0 z-[120] bg-slate-800/90 p-4 flex justify-between items-center shadow-xl">
                             <div className="flex items-center gap-6">
-                                <button onClick={() => setPrintingSlips([])} className="bg-white/10 text-white px-4 py-2 rounded-lg font-bold hover:bg-white/20 transition-colors">閉じる</button>
+                                <button onClick={() => { setForceDisplayPrice(false); setPrintingSlips([]); }} className="bg-white/10 text-white px-4 py-2 rounded-lg font-bold hover:bg-white/20 transition-colors">閉じる</button>
                             </div>
                             <div className="flex items-center gap-4">
                                 {printingSlips.some(s => s.type === 'provisional' || s.type === 'reslip' || s.type === 'outbound') && (
@@ -2629,9 +2690,20 @@ export const SlipManager: React.FC<{
                                                                                     <span className="font-extrabold text-sm truncate group-hover:text-blue-700 transition-colors">{i.name}</span>
                                                                                     <div className="flex items-center gap-2 shrink-0">
                                                                                         {i.historyMonth && (
-                                                                                            <div className="flex gap-1">
+                                                                                            <div className="flex items-center gap-1">
                                                                                                 <span className="text-[9px] bg-rose-50 text-rose-600 px-2 py-0.5 rounded font-black">{i.historyMonth} 納品</span>
                                                                                                 <span className="text-[9px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-black">残: {i.availableQuantity ?? '-'}</span>
+                                                                                                {i.sourceSlipNos && i.sourceSlipNos.length > 0 && (
+                                                                                                    <button
+                                                                                                        type="button"
+                                                                                                        onClick={(e) => { e.stopPropagation(); handlePreviewSourceSlips(i.sourceSlipNos); }}
+                                                                                                        className="text-[9px] bg-blue-50 hover:bg-blue-100 text-blue-600 px-2 py-0.5 rounded font-black border border-blue-200 flex items-center gap-1 transition-colors"
+                                                                                                        title={`元伝票 (${i.sourceSlipNos.join(', ')}) をプレビュー確認`}
+                                                                                                    >
+                                                                                                        <FileText size={10} />
+                                                                                                        納品書確認 ({i.sourceSlipNos[0]}{i.sourceSlipNos.length > 1 ? ` 他${i.sourceSlipNos.length - 1}` : ''})
+                                                                                                    </button>
+                                                                                                )}
                                                                                             </div>
                                                                                         )}
                                                                                         <div className="flex flex-col items-end">
@@ -2706,6 +2778,7 @@ export const SlipManager: React.FC<{
                                                                         handleRegisterToMaster={handleRegisterToMaster}
                                                                         onDelete={handleDeleteFromCart}
                                                                         isProvEdit={editingSlipId ? archivedSlips.find(s => s.id === editingSlipId)?.type === 'provisional' : false}
+                                                                        onPreviewSourceSlips={handlePreviewSourceSlips}
                                                                     />
                                                                 ))}
                                                                 {provided.placeholder}
