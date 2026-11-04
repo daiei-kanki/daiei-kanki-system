@@ -1650,8 +1650,13 @@ export const SlipManager: React.FC<{
             end = `${y}-${String(m).padStart(2, '0')}-${String(closingDay).padStart(2, '0')}`;
         }
         const validSlips = allSlipsForCustomer.filter(s => {
-            const inRange = (s.date >= start && s.date <= end) || s.items?.some(i => i.date && i.date >= start && i.date <= end);
-            return inRange && (s.type === 'provisional' || s.type === 'return');
+            if (s.type === 'return') {
+                return s.date >= start && s.date <= end;
+            }
+            if (s.type === 'provisional') {
+                return (s.date >= start && s.date <= end) || s.items?.some(i => i.date && i.date >= start && i.date <= end);
+            }
+            return false;
         });
         if (validSlips.length === 0) return alert("対象期間内に確定済みのデータが存在しません。");
 
@@ -1666,6 +1671,8 @@ export const SlipManager: React.FC<{
             s.items.forEach(i => {
                 const qty = i.deliveredQuantity ?? i.quantity;
                 if (qty === 0) return;
+                const itemEffDate = s.type === 'return' ? s.date : (i.date || s.date);
+                if (itemEffDate && (itemEffDate < start || itemEffDate > end)) return;
                 
                 // 顧客ルールによる単価の再適用（伝票保存時の単価ミスをここで自動修正する）
                 // ただし、備考がある場合や「特値」と明記されている場合は手動設定を優先
@@ -1989,7 +1996,9 @@ export const SlipManager: React.FC<{
                 end = `${y}-${String(m).padStart(2, '0')}-${String(closingDay).padStart(2, '0')}`;
             }
 
-            const isInPeriod = (s.date >= start && s.date <= end) || s.items?.some(i => i.date && i.date >= start && i.date <= end);
+            const isInPeriod = s.type === 'return'
+                ? (s.date >= start && s.date <= end)
+                : ((s.date >= start && s.date <= end) || s.items?.some(i => i.date && i.date >= start && i.date <= end));
             if (isInPeriod) {
                 if (!map.has(s.customerName)) map.set(s.customerName, new Map());
                 const siteMap = map.get(s.customerName)!;
