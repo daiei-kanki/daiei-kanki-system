@@ -274,7 +274,52 @@ export const updateCustomer = async (id: string, c: Partial<Customer>) => {
 export const deleteCustomer = (id: string) => deleteDoc(doc(db, COLLECTIONS.CUSTOMERS, id));
 
 export const addPricingRule = async (r: Omit<PricingRule, 'id'>) => {
-    const docRef = await addDoc(collection(db, COLLECTIONS.RULES), { ...r, updatedAt: Date.now() });
+    // 同一顧客・同一現場・同一資材(または同一分類・型式・寸法)の既存ルールを検索し、重複追加ではなく上書き更新(upsert)する
+    const q = query(collection(db, COLLECTIONS.RULES), where('customerName', '==', r.customerName));
+    const snap = await getDocs(q);
+    const targetSite = (r.siteName || '').trim();
+    const targetMatId = (r.materialId || '').trim();
+    const targetName = (r.materialName || '').trim();
+    const targetCat = (r.category || '').trim();
+    const targetModel = (r.model || '').trim();
+    const targetDims = (r.dimensions || '').trim();
+
+    const matchedDocs = snap.docs.filter(d => {
+        const data = d.data() as PricingRule;
+        if ((data.siteName || '').trim() !== targetSite) return false;
+        if (targetMatId) {
+            if (data.materialId === targetMatId) return true;
+            // materialId未設定または旧IDでも4項目(品名・分類・型式・寸法)が完全一致する同一資材ルールなら統合対象とする
+            return (
+                targetName !== '' &&
+                (data.materialName || '').trim() === targetName &&
+                (data.category || '').trim() === targetCat &&
+                (data.model || '').trim() === targetModel &&
+                (data.dimensions || '').trim() === targetDims
+            );
+        }
+        return (
+            !data.materialId &&
+            (data.materialName || '').trim() === targetName &&
+            (data.category || '').trim() === targetCat &&
+            (data.model || '').trim() === targetModel &&
+            (data.dimensions || '').trim() === targetDims
+        );
+    });
+
+    const cleanRule = removeUndefined({ ...r, updatedAt: Date.now() });
+
+    if (matchedDocs.length > 0) {
+        const primaryDoc = matchedDocs[0];
+        await updateDoc(doc(db, COLLECTIONS.RULES, primaryDoc.id), cleanRule);
+        // 既に重複していた余剰ルールがあれば同時に削除して1本に収束させる
+        if (matchedDocs.length > 1) {
+            await Promise.all(matchedDocs.slice(1).map(dup => deleteDoc(doc(db, COLLECTIONS.RULES, dup.id))));
+        }
+        return primaryDoc.id;
+    }
+
+    const docRef = await addDoc(collection(db, COLLECTIONS.RULES), cleanRule);
     return docRef.id;
 };
 export const updatePricingRule = async (id: string, r: Partial<PricingRule>) => {

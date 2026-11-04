@@ -114,7 +114,9 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
         if (isNaN(price)) return;
         if (!activeCustomer) return;
         try {
+            const matchedCust = customers.find(c => c.name === activeCustomer);
             await storage.addPricingRule({
+                ...(matchedCust?.id ? { customerId: matchedCust.id } : {}),
                 customerName: activeCustomer,
                 siteName: activeSite || '',
                 category: item.category,
@@ -176,7 +178,9 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
             if (!window.confirm(`【確認】選択した${selectedIds.size}件を、${activeCustomer}の個別単価ルールとして保存しますか？`)) return;
             setIsProcessing(true);
             try {
+                const matchedCust = customers.find(c => c.name === activeCustomer);
                 const newRules: Omit<PricingRule, 'id'>[] = items.filter(i => selectedIds.has(i.id)).map(item => ({
+                    ...(matchedCust?.id ? { customerId: matchedCust.id } : {}),
                     customerName: activeCustomer,
                     siteName: activeSite || '',
                     category: item.category,
