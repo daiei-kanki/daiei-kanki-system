@@ -266,14 +266,19 @@ const App: React.FC = () => {
     const handleExcelExport = (format: 'xlsx' | 'csv') => {
         try {
             const exportData = items.map(item => ({
+                '資材ID': item.id,
                 'カテゴリー': item.category,
                 '品名': item.name,
+                'メーカー': item.manufacturer || '',
                 '型式・仕様': item.model,
                 '寸法・サイズ': item.dimensions,
+                '規格・サイズ': item.size || '',
                 '定価': item.listPrice,
                 '標準売価': item.sellingPrice,
                 '仕入原価': item.costPrice,
+                '数量': item.quantity ?? 0,
                 '単位': item.unit,
+                '保管場所': item.location || '',
                 '備考': item.notes || '',
                 '最終更新日時': item.updatedAt ? new Date(item.updatedAt).toLocaleString() : ''
             }));
@@ -289,6 +294,32 @@ const App: React.FC = () => {
         }
     };
 
+    const parseExcelNumericCell = (raw: any): { value: number | undefined; invalid: boolean; rawStr: string } => {
+        if (raw === undefined || raw === null) return { value: undefined, invalid: false, rawStr: '' };
+        if (typeof raw === 'number') {
+            return Number.isFinite(raw)
+                ? { value: raw, invalid: false, rawStr: String(raw) }
+                : { value: 0, invalid: true, rawStr: String(raw) };
+        }
+        const rawStr = String(raw).trim();
+        if (rawStr === '' || rawStr === '-' || rawStr === 'ー' || rawStr === '―') {
+            return { value: undefined, invalid: false, rawStr };
+        }
+        // 全角数字・ピリオド・マイナスを半角へ揃え、通貨記号(¥, ￥, 円)やカンマ・空白を除去
+        const cleaned = rawStr
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+            .replace(/[．]/g, '.')
+            .replace(/[－−]/g, '-')
+            .replace(/[¥￥円,，\s\u3000]/g, '');
+        if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
+            const num = Number(cleaned);
+            if (Number.isFinite(num)) {
+                return { value: num, invalid: false, rawStr };
+            }
+        }
+        return { value: 0, invalid: true, rawStr };
+    };
+
     const handleExcelRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -300,23 +331,59 @@ const App: React.FC = () => {
 
             if (rows.length === 0) { alert('データが見つかりませんでした。'); return; }
 
-            // Excelの列名 → Materialフィールドにマッピング
-            const mapped = rows.map(row => ({
-                category:     String(row['カテゴリー'] || row['category'] || '消耗品・雑材'),
-                name:         String(row['品名']       || row['name']     || ''),
-                model:        String(row['型式・仕様'] || row['model']    || ''),
-                dimensions:   String(row['寸法・サイズ']|| row['dimensions'] || ''),
-                listPrice:    Number(row['定価']       || row['listPrice']  || 0),
-                sellingPrice: Number(row['標準売価']   || row['sellingPrice']|| 0),
-                costPrice:    Number(row['仕入原価']   || row['costPrice']  || 0),
-                unit:         String(row['単位']       || row['unit']    || '個'),
-                notes:        String(row['備考']       || row['notes']   || ''),
-                quantity:     Number(row['数量']       || row['quantity']|| 0),
-                location:     String(row['保管場所']   || row['location']|| ''),
-                manufacturer: String(row['メーカー']   || row['manufacturer'] || ''),
-            })).filter(r => r.name); // 品名がないものは除外
+            const invalidRows: string[] = [];
+            const mapped: Partial<MaterialItem>[] = [];
 
-            if (!window.confirm(`${mapped.length.toLocaleString()}件のExcelデータをインポートしますか？\n（既存データへの追加になります）`)) return;
+            rows.forEach((row, idx) => {
+                const name = String(row['品名'] ?? row['name'] ?? '').trim();
+                if (!name) return; // 品名がない行は除外
+
+                const listRes = parseExcelNumericCell(row['定価'] ?? row['listPrice']);
+                const sellRes = parseExcelNumericCell(row['標準売価'] ?? row['sellingPrice']);
+                const costRes = parseExcelNumericCell(row['仕入原価'] ?? row['costPrice']);
+                const qtyRes  = parseExcelNumericCell(row['数量'] ?? row['quantity']);
+
+                const badFields: string[] = [];
+                if (listRes.invalid) badFields.push(`定価="${listRes.rawStr}"`);
+                if (sellRes.invalid) badFields.push(`標準売価="${sellRes.rawStr}"`);
+                if (costRes.invalid) badFields.push(`仕入原価="${costRes.rawStr}"`);
+                if (qtyRes.invalid)  badFields.push(`数量="${qtyRes.rawStr}"`);
+
+                if (badFields.length > 0) {
+                    invalidRows.push(`${idx + 2}行目 ${name}: ${badFields.join(', ')}`);
+                    return;
+                }
+
+                const rawId = String(row['資材ID'] ?? row['id'] ?? '').trim();
+                mapped.push({
+                    ...(rawId ? { id: rawId } : {}),
+                    category:     String(row['カテゴリー'] ?? row['category'] ?? '消耗品・雑材').trim() || '消耗品・雑材',
+                    name,
+                    model:        String(row['型式・仕様'] ?? row['model'] ?? '').trim(),
+                    dimensions:   String(row['寸法・サイズ'] ?? row['dimensions'] ?? '').trim(),
+                    size:         String(row['規格・サイズ'] ?? row['size'] ?? '').trim() || undefined,
+                    listPrice:    listRes.value ?? 0,
+                    sellingPrice: sellRes.value ?? 0,
+                    costPrice:    costRes.value ?? 0,
+                    unit:         String(row['単位'] ?? row['unit'] ?? '個').trim() || '個',
+                    notes:        String(row['備考'] ?? row['notes'] ?? '').trim(),
+                    ...(qtyRes.value !== undefined ? { quantity: qtyRes.value } : {}),
+                    location:     String(row['保管場所'] ?? row['location'] ?? '').trim(),
+                    manufacturer: String(row['メーカー'] ?? row['manufacturer'] ?? '').trim(),
+                });
+            });
+
+            if (invalidRows.length > 0) {
+                const previewInvalid = invalidRows.slice(0, 10).join('\n') + (invalidRows.length > 10 ? `\n…他 ${invalidRows.length - 10} 件` : '');
+                alert(`⚠️ 数値に変換できない金額・数量（「応談」等の文字）が含まれる行が ${invalidRows.length} 件あったため、0円・在庫0での誤登録を防ぐためスキップしました。\n\n${previewInvalid}`);
+            }
+
+            if (mapped.length === 0) {
+                alert('取り込み可能な有効データがありませんでした。');
+                return;
+            }
+
+            if (!window.confirm(`${mapped.length.toLocaleString()}件のExcelデータをインポートしますか？\n（既存資材はIDまたは品名・型式・寸法・分類で上書き更新され、新規資材は追加されます）`)) return;
             setLoadingAI(true);
             await storage.importMaterials(mapped);
             alert(`${mapped.length.toLocaleString()}件をインポートしました。`);
