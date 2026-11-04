@@ -350,19 +350,41 @@ const SlipPage: React.FC<{
                                 </div>
                             )}
                         </div>
-                        {isGlobal && slip.siteSummaries && (
-                            <div className="border rounded-xl overflow-hidden shadow-sm bg-white flex flex-col flex-grow max-h-[480px]">
-                                <div className="bg-slate-800 text-white px-4 py-2 text-[10px] font-bold flex justify-between tracking-widest shrink-0"><span>現場別 売上内訳 (税抜)</span><span>小計金額</span></div>
-                                <div className="p-0 divide-y divide-slate-100 overflow-y-auto">
-                                    {slip.siteSummaries.map((site, idx) => (
-                                        <div key={idx} className="flex justify-between text-[10px] py-1.5 px-4 hover:bg-slate-50">
-                                            <span className="font-bold text-slate-700">{site.name}</span>
-                                            <span className="font-mono font-bold">{(site.total || 0) < 0 ? `▲¥${Math.abs(site.total || 0).toLocaleString()}` : `¥${(site.total || 0).toLocaleString()}`}</span>
-                                        </div>
-                                    ))}
+                        {isGlobal && slip.siteSummaries && (() => {
+                            const covPageNum: number = (slip as any).coverPageNum || 1;
+                            const covTotalPages: number = (slip as any).coverTotalPages || 1;
+                            const pageSitesTotal = slip.siteSummaries.reduce((acc, s) => acc + (s.total || 0), 0);
+                            const fmtVal = (v: number) => v < 0 ? `▲¥${Math.abs(v).toLocaleString()}` : `¥${v.toLocaleString()}`;
+                            return (
+                                <div className="border rounded-xl overflow-hidden shadow-sm bg-white flex flex-col">
+                                    <div className="bg-slate-800 text-white px-4 py-2 text-[10px] font-bold flex justify-between tracking-widest shrink-0">
+                                        <span>現場別 売上内訳 (税抜){covTotalPages > 1 ? ` [${covPageNum}/${covTotalPages}頁]` : ''}</span>
+                                        <span>小計金額</span>
+                                    </div>
+                                    <div className="p-0 divide-y divide-slate-100">
+                                        {slip.siteSummaries.map((site, idx) => (
+                                            <div key={idx} className="flex justify-between text-[10px] py-1.5 px-4 hover:bg-slate-50">
+                                                <span className="font-bold text-slate-700">{site.name}</span>
+                                                <span className="font-mono font-bold">{fmtVal(site.total || 0)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="bg-slate-50 border-t border-slate-200 px-4 py-1.5 text-[10px] font-black flex justify-between items-center shrink-0">
+                                        {covTotalPages > 1 && covPageNum < covTotalPages ? (
+                                            <>
+                                                <span className="text-slate-500">この頁の内訳計（次頁へ続く）</span>
+                                                <span className="font-mono text-slate-700">{fmtVal(pageSitesTotal)}</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <span className="text-slate-700">現場別内訳 合計 (税抜)</span>
+                                                <span className="font-mono text-slate-900">{fmtVal(currentSales)}</span>
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            );
+                        })()}
                         <div className="mt-auto pt-4 border-t border-slate-200 shrink-0 flex justify-between items-end gap-8">
                             <div className="flex-grow">
                                 {isGlobal ? (
@@ -946,7 +968,26 @@ export const SlipManager: React.FC<{
         const result: Slip[] = [];
         rawPrintingSlips.forEach(slip => {
             if (slip.type === 'cover') {
-                result.push(slip);
+                const maxSitesPerCover = 15;
+                if (slip.constructionName === '全現場一括集計' && slip.siteSummaries && slip.siteSummaries.length > maxSitesPerCover) {
+                    const covTotalPages = Math.ceil(slip.siteSummaries.length / maxSitesPerCover);
+                    for (let i = 0; i < slip.siteSummaries.length; i += maxSitesPerCover) {
+                        const pageIdx = Math.floor(i / maxSitesPerCover) + 1;
+                        result.push({
+                            ...slip,
+                            id: pageIdx === 1 ? slip.id : `${slip.id || 'cover'}-pg${pageIdx}`,
+                            siteSummaries: slip.siteSummaries.slice(i, i + maxSitesPerCover),
+                            coverPageNum: pageIdx,
+                            coverTotalPages: covTotalPages
+                        } as Slip);
+                    }
+                    return;
+                }
+                result.push({
+                    ...slip,
+                    coverPageNum: (slip as any).coverPageNum ?? 1,
+                    coverTotalPages: (slip as any).coverTotalPages ?? 1
+                } as Slip);
                 return;
             }
             const limit = 16;
