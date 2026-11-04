@@ -400,19 +400,19 @@ const SlipPage: React.FC<{
                         <p className="font-bold">No. {slip.slipNumber || 'PENDING'}</p>
                         <div className="text-[10px] text-slate-600 mt-1 flex flex-col items-end gap-0.5">
                             {!isInvoice && (
-                                <div className="flex items-center justify-end gap-1">
+                                <div className={`flex items-center justify-end gap-1 ${!slip.orderDate ? 'print:hidden' : ''}`}>
                                     <span className="font-sans font-bold text-slate-500">受注日:</span>
                                     <input 
                                         type="date" 
-                                        value={slip.orderDate || slip.date || ''} 
+                                        value={slip.orderDate || ''} 
                                         onChange={(e) => onUpdateSlip?.({ orderDate: e.target.value })}
                                         className="bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-400 rounded p-0.5 text-right w-24 print:hidden cursor-pointer hover:bg-slate-50 font-mono font-bold"
                                     />
-                                    <span className="hidden print:inline font-mono font-bold">{slip.orderDate || slip.date || ''}</span>
+                                    <span className="hidden print:inline font-mono font-bold">{slip.orderDate || ''}</span>
                                 </div>
                             )}
                             <div className="flex items-center justify-end gap-1">
-                                <span className="font-sans font-bold text-slate-500">{isWorkSlip ? '出庫日:' : (isReturn ? '返品日:' : (isInvoice ? '発行日:' : '納品日:'))}</span>
+                                <span className="font-sans font-bold text-slate-500">{isWorkSlip ? '出庫日:' : (isInvoice ? '発行日:' : (slip.type === 'return' ? '返品日:' : '納品日:'))}</span>
                                 <input 
                                     type="date" 
                                     value={slip.date || ''} 
@@ -479,8 +479,8 @@ const SlipPage: React.FC<{
                                     <td className="text-center border-r">{idx + 1}</td>
                                     {isDetail && (
                                         <td className="text-center border-r font-mono text-[9px] py-0.5">
-                                            <div className="text-[8px] text-slate-500 leading-none">{item?.orderDate?.slice(5).replace('-', '/') || ''}</div>
-                                            <div className="font-bold leading-none mt-1">{((isReturn ? (slip.date || item?.date) : (item?.date || slip.date)) || '').slice(5).replace('-', '/')}</div>
+                                            <div className="text-[8px] text-slate-500 leading-none">{item ? (item.orderDate?.slice(5).replace('-', '/') || '') : ''}</div>
+                                            <div className="font-bold leading-none mt-1">{item ? ((item.date || (slip.type !== 'invoice' ? slip.date : '')) || '').slice(5).replace('-', '/') : ''}</div>
                                         </td>
                                     )}
                                     <td className="px-2 border-r truncate font-bold">
@@ -1294,6 +1294,7 @@ export const SlipManager: React.FC<{
         try {
             const targetSlip = editingSlipId ? slips.find(sl => sl.id === editingSlipId) : null;
             const prevSlipDate = targetSlip?.date;
+            const prevOrderDate = targetSlip?.orderDate;
             const isProvEdit = editingSlipId && archivedSlips.find(s => s.id === editingSlipId)?.type === 'provisional';
 
             const processedItems = cart.map((i: SlipItem) => {
@@ -1302,17 +1303,21 @@ export const SlipManager: React.FC<{
                 // 仮納品書の修正時、元のdeliveredQuantityを保持する（未設定時はqtyを使用）
                 const finalDeliveredQty = isProvEdit ? (i.deliveredQuantity ?? qty) : qty;
                 
-                // 納品日: 返品モードは slipDate。仮納品書修正時、前回の伝票日付と同じだった明細は新しい slipDate に追従
+                // 納品日: 返品モードや新規作成時は slipDate。修正時は前回の伝票日付と同じだった明細は新しい slipDate に追従し、個別変更された納品日は保持
                 let finalItemDate = slipDate;
                 if (activeMode === 'return') {
                     finalItemDate = slipDate;
-                } else if (isProvEdit) {
+                } else if (editingSlipId) {
                     finalItemDate = (i.date && prevSlipDate && i.date !== prevSlipDate) ? i.date : slipDate;
                 } else {
-                    finalItemDate = i.date || slipDate;
+                    finalItemDate = slipDate;
                 }
 
-                return { ...i, id: realId, quantity: qty, deliveredQuantity: finalDeliveredQty, date: finalItemDate, orderDate: i.orderDate || orderDate };
+                const finalOrderDate = editingSlipId
+                    ? ((i.orderDate && prevOrderDate && i.orderDate !== prevOrderDate) ? i.orderDate : orderDate)
+                    : orderDate;
+
+                return { ...i, id: realId, quantity: qty, deliveredQuantity: finalDeliveredQty, date: finalItemDate, orderDate: finalOrderDate };
             });
 
             if (activeMode === 'return') {
@@ -1578,8 +1583,8 @@ export const SlipManager: React.FC<{
                 // 寸法や型式の僅かな違い（スペースの有無など）で合算されないよう正規化
                 const safeDim = (i.dimensions || '').replace(/\s+/g, '').trim();
                 const safeModel = (i.model || '').replace(/\s+/g, '').trim();
-                const actualDate = (s.type === 'provisional' ? (s.date || i.date) : (i.date || s.date));
-                const actualOrderDate = i.orderDate || s.orderDate || '';
+                const actualDate = (s.type === 'return' ? (s.date || i.date) : (i.date || s.date));
+                const actualOrderDate = s.orderDate || i.orderDate || '';
                 const itemKey = `${actualDate}_${actualOrderDate}_${s.slipNumber || 'UNK'}_${isReturning ? 'RET' : 'SALE'}_${i.name}_${i.manufacturer || ''}_${safeModel}_${safeDim}_${price}`;
 
                 if (itemsMap.has(itemKey)) {
@@ -1746,7 +1751,7 @@ export const SlipManager: React.FC<{
                         documentTax: dTax,
                         documentGrandTotal: dNet + dTax,
                         date: date,
-                        orderDate: orderDate || originalSlip?.orderDate || '',
+                        orderDate: originalSlip?.orderDate || orderDate || '',
                         slipNumber: `DLV-${sourceSlipNo}${i > 0 ? `-${i/16 + 1}` : ''}`,
                         deliveryDestination: originalSlip?.deliveryDestination || 'none',
                         deliveryTime: originalSlip?.deliveryTime || 'none',
@@ -1845,6 +1850,8 @@ export const SlipManager: React.FC<{
             ...item,
             quantity: item.quantity, // 欠品数（不足数）をそのまま受注数にセット
             deliveredQuantity: undefined, // 出庫数はまだ未確定
+            date: s.date,
+            orderDate: s.orderDate || s.date,
             id: `${item.id}__${generateId()}`
         })));
         // 保存完了後に元の欠品伝票を削除するよう予約
@@ -2092,9 +2099,28 @@ export const SlipManager: React.FC<{
                                                 settings={settings}
                                                 pricingRules={pricingRules}
                                                 onUpdateSlip={async (updates) => {
+                                                    const baseId = slip.id ? slip.id.replace(/-pg\d+$/, '') : null;
+                                                    const prevSlipDate = slip.date;
+                                                    const prevOrderDate = slip.orderDate;
+
                                                     setPrintingSlips(prev => prev.map((s, i) => {
-                                                        if (i !== idx) return s;
-                                                        const next = { ...s, ...updates };
+                                                        const sBaseId = s.id ? s.id.replace(/-pg\d+$/, '') : null;
+                                                        const isSameSlip = baseId ? (sBaseId === baseId) : (i === idx);
+                                                        if (!isSameSlip) return s;
+
+                                                        const nextItems = (s.type !== 'cover' && s.items && (updates.date !== undefined || updates.orderDate !== undefined))
+                                                            ? s.items.map(it => ({
+                                                                ...it,
+                                                                ...(updates.date !== undefined ? {
+                                                                    date: (s.type === 'provisional' && it.date && prevSlipDate && it.date !== prevSlipDate) ? it.date : updates.date
+                                                                } : {}),
+                                                                ...(updates.orderDate !== undefined ? {
+                                                                    orderDate: (it.orderDate && prevOrderDate && it.orderDate !== prevOrderDate) ? it.orderDate : updates.orderDate
+                                                                } : {})
+                                                            }))
+                                                            : s.items;
+
+                                                        const next = { ...s, ...updates, ...(nextItems ? { items: nextItems } : {}) };
                                                         if (s.type === 'cover') {
                                                             const p = next.previousBillingAmount || 0;
                                                             const r = next.paymentReceived || 0;
@@ -2106,9 +2132,26 @@ export const SlipManager: React.FC<{
                                                         }
                                                         return next;
                                                     }));
-                                                    const baseId = slip.id ? slip.id.replace(/-pg\d+$/, '') : null;
-                                                    if (baseId && baseId.length > 5) {
-                                                        let dbUpdates = { ...updates };
+
+                                                    const isVirtualInvoiceDoc = baseId ? (baseId.startsWith('delivery-') || baseId.startsWith('invoice-') || baseId.startsWith('site-cover-')) : false;
+                                                    if (baseId && baseId.length > 5 && !isVirtualInvoiceDoc) {
+                                                        let dbUpdates: Partial<Slip> = { ...updates };
+                                                        if (slip.type !== 'cover' && (updates.date !== undefined || updates.orderDate !== undefined)) {
+                                                            const fullSlip = slips.find(sl => sl.id === baseId) || slip;
+                                                            const fullPrevDate = fullSlip.date;
+                                                            const fullPrevOrderDate = fullSlip.orderDate;
+                                                            if (fullSlip.items) {
+                                                                dbUpdates.items = fullSlip.items.map(it => ({
+                                                                    ...it,
+                                                                    ...(updates.date !== undefined ? {
+                                                                        date: (fullSlip.type === 'provisional' && it.date && fullPrevDate && it.date !== fullPrevDate) ? it.date : updates.date
+                                                                    } : {}),
+                                                                    ...(updates.orderDate !== undefined ? {
+                                                                        orderDate: (it.orderDate && fullPrevOrderDate && it.orderDate !== fullPrevOrderDate) ? it.orderDate : updates.orderDate
+                                                                    } : {})
+                                                                }));
+                                                            }
+                                                        }
                                                         if (slip.type === 'cover') {
                                                             const p = (updates.previousBillingAmount !== undefined) ? updates.previousBillingAmount : (slip.previousBillingAmount || 0);
                                                             const r = (updates.paymentReceived !== undefined) ? updates.paymentReceived : (slip.paymentReceived || 0);
