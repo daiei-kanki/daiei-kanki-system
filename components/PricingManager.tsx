@@ -14,7 +14,7 @@ interface PricingManagerProps {
 }
 
 export const PricingManager = ({ rules, customers, items, onClose }: PricingManagerProps) => {
-    const [view, setView] = useState<'list' | 'edit'>('list');
+    const [view, setView] = useState<'list' | 'edit' | 'orphaned'>('list');
     const [targetCustomers, setTargetCustomers] = useState<Customer[]>([]);
     const [listSelected, setListSelected] = useState<Set<string>>(new Set<string>());
     const [newCustomerInput, setNewCustomerInput] = useState('');
@@ -101,11 +101,16 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
     }, [referenceRules]);
 
     const masterItemMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
-    const orphanedRulesCount = useMemo(() => {
-        return rules.filter(r => r.materialId && !masterItemMap.has(r.materialId)).length;
-    }, [rules, masterItemMap]);
+    const orphanedRulesList = useMemo(() => {
+        if (items.length === 0) return [];
+        return rules.filter(r => r.materialId && !masterItemMap.has(r.materialId));
+    }, [rules, masterItemMap, items.length]);
+    const orphanedRulesCount = orphanedRulesList.length;
 
     const handleRepairPricingRuleIds = async () => {
+        if (items.length === 0) {
+            return alert("⚠️ 資材マスターがまだ読み込まれていません。読み込み完了後に再度お試しください。");
+        }
         const orphanedRules = rules.filter(r => r.materialId && !masterItemMap.has(r.materialId));
 
         if (orphanedRules.length === 0) {
@@ -114,16 +119,15 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
 
         const confirmRun = window.confirm(
             `🔍 単価ルールの背番号（資材ID）診断結果:\n実在しない資材IDを持つ単価ルールが【 ${orphanedRules.length} 件 】検出されました。\n\n` +
-            `【自動復元・クリーンアップを実行しますか？】\n` +
-            `1. 品名・分類・型式・寸法が一致する実在資材があれば、正しい資材ID（背番号）へ自動更新します。\n` +
-            `2. 一致する資材が見つからない場合は、単価落ちを防ぐため materialId を空にし、名前照合ルールへ安全に変更します。`
+            `【安全な自動照合・修復を実行しますか？】\n` +
+            `1. 品名・分類・型式・寸法がすべて完全一致し、候補が1件のみに絞られる場合だけ正しい資材IDへ付け替えます。\n` +
+            `2. 一致しないルールや複数候補があるルールはIDを空にせずそのまま残し、手動確認一覧へ表示します（別の資材に誤適用されるのを防ぎます）。`
         );
 
         if (!confirmRun) return;
 
         setIsSaving(true);
         let relinkedCount = 0;
-        let clearedCount = 0;
 
         try {
             const updatePromises = orphanedRules.map(rule => {
@@ -132,36 +136,33 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
                 const normModel = normalizeForSearch(rule.model || '');
                 const normDims = normalizeForSearch(rule.dimensions || '');
 
-                const matchedItem = items.find(item => {
+                // 品名・分類・型式・寸法すべて一致し、かつ候補が1件だけの時のみ付け替え
+                const exactCandidates = items.filter(item => {
                     return (
+                        normName !== '' &&
                         normalizeForSearch(item.name) === normName &&
                         normalizeForSearch(item.category) === normCat &&
                         normalizeForSearch(item.model || '') === normModel &&
                         normalizeForSearch(item.dimensions || '') === normDims
                     );
-                }) || items.find(item => {
-                    return (
-                        normalizeForSearch(item.name) === normName &&
-                        normalizeForSearch(item.category) === normCat &&
-                        normalizeForSearch(item.model || '') === normModel
-                    );
                 });
 
-                if (matchedItem) {
+                if (exactCandidates.length === 1) {
                     relinkedCount++;
-                    return storage.updatePricingRule(rule.id, { materialId: matchedItem.id });
+                    return storage.updatePricingRule(rule.id, { materialId: exactCandidates[0].id });
                 } else {
-                    clearedCount++;
-                    return storage.updatePricingRule(rule.id, { materialId: '' });
+                    // 解決できないルールは空にせずそのまま保持（他資材への誤適用防止）
+                    return Promise.resolve();
                 }
             });
 
             await Promise.all(updatePromises);
+            const remainingCount = orphanedRules.length - relinkedCount;
             alert(
                 `🎉 背番号照合・修復処理が完了しました！\n\n` +
-                `・実在資材IDへ再紐付け完了: ${relinkedCount} 件\n` +
-                `・名前照合ルールへ安全変更 (IDクリア): ${clearedCount} 件\n` +
-                `・不整合ルール残数: 0 件`
+                `・完全一致（候補1件）により再紐付け完了: ${relinkedCount} 件\n` +
+                `・要確認として保持（ID未変更）: ${remainingCount} 件\n` +
+                `・不整合ルール残数: ${remainingCount} 件`
             );
         } catch (err: any) {
             alert(`修復処理中にエラーが発生しました: ${err?.message || '不明なエラー'}`);
@@ -348,6 +349,55 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
         }
     };
 
+    if (view === 'orphaned') {
+        return (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+                    <div className="p-6 border-b flex justify-between items-center bg-amber-50">
+                        <div className="flex items-center gap-3">
+                            <button onClick={() => setView('list')} className="p-2 hover:bg-amber-100 rounded-lg"><ArrowLeft size={20} /></button>
+                            <div>
+                                <h2 className="text-lg font-bold text-amber-900">不整合単価ルール一覧 ({orphanedRulesList.length}件)</h2>
+                                <p className="text-xs text-amber-700">実在しない資材IDを指しているルールです。正しい資材へ手動紐付けするか削除できます。</p>
+                            </div>
+                        </div>
+                        <button onClick={onClose}><X size={24} /></button>
+                    </div>
+                    <div className="p-6 overflow-y-auto space-y-3 bg-slate-50 flex-1">
+                        {orphanedRulesList.map(r => (
+                            <div key={r.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2 text-xs">
+                                <div className="flex justify-between items-start gap-4">
+                                    <div className="space-y-1">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{r.customerName}</span>
+                                            <span className="text-slate-600 font-bold">{r.siteName || '全現場共通'}</span>
+                                            <span className="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                                                {r.method === 'fixed_price' ? `固定 ¥${r.value.toLocaleString()}` : (r.method === 'percent_of_list' ? `定価の ${r.value}%` : `原価+${r.value}%`)}
+                                            </span>
+                                        </div>
+                                        <div className="font-bold text-sm text-slate-800">
+                                            品名: {r.materialName || '(未設定)'} / 分類: {r.category || '(未設定)'} / 型式: {r.model || '(なし)'} / 寸法: {r.dimensions || '(なし)'}
+                                        </div>
+                                        <div className="text-[10px] text-slate-400 font-mono">旧資材ID: {r.materialId}</div>
+                                    </div>
+                                    <button
+                                        onClick={() => storage.deletePricingRule(r.id)}
+                                        className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg font-bold shrink-0 flex items-center gap-1"
+                                    >
+                                        <Trash2 size={14} /> 削除
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                        {orphanedRulesList.length === 0 && (
+                            <div className="text-center py-12 text-slate-400 font-bold">不整合な単価ルールはありません。</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     if (view === 'list') {
         return (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
@@ -369,12 +419,23 @@ export const PricingManager = ({ rules, customers, items, onClose }: PricingMana
                                     </p>
                                 </div>
                             </div>
-                            <button
-                                onClick={handleRepairPricingRuleIds}
-                                className={`px-4 py-2 rounded-lg text-xs font-bold shrink-0 transition-all shadow-sm ${orphanedRulesCount > 0 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
-                            >
-                                {orphanedRulesCount > 0 ? '一括照合・修復を実行' : '再診断を実行'}
-                            </button>
+                            <div className="flex gap-2 shrink-0">
+                                {orphanedRulesCount > 0 && (
+                                    <button
+                                        onClick={() => setView('orphaned')}
+                                        className="px-3 py-2 rounded-lg text-xs font-bold bg-white border border-amber-300 text-amber-800 hover:bg-amber-100 transition-all shadow-sm"
+                                    >
+                                        不整合一覧を確認
+                                    </button>
+                                )}
+                                <button
+                                    onClick={handleRepairPricingRuleIds}
+                                    disabled={items.length === 0 || isSaving}
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${orphanedRulesCount > 0 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                                >
+                                    {orphanedRulesCount > 0 ? '一括照合・修復を実行' : '再診断を実行'}
+                                </button>
+                            </div>
                         </div>
 
                         <div className="bg-white p-6 rounded-xl border border-blue-200">
