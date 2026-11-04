@@ -1512,9 +1512,17 @@ export const SlipManager: React.FC<{
                 location: '',
                 notes: '伝票から自動登録'
             };
-            await storage.addMaterial(materialData);
-            alert('資材マスターに登録しました。');
-            onUpdateCart(prev => prev.map(i => i.id === item.id ? { ...i, id: 'registered-' + Date.now() + '__' + generateId() } : i));
+            try {
+                const newMatId = await storage.addMaterial(materialData);
+                alert('資材マスターに登録しました。');
+                onUpdateCart(prev => prev.map(i => i.id === item.id ? { ...i, originalMaterialId: newMatId, id: `${newMatId}__${generateId()}` } : i));
+            } catch (e: any) {
+                if (e?.message === 'DUPLICATE_MATERIAL') {
+                    alert('この資材（分類・品名・型式・寸法）は既に資材マスターに登録されています。');
+                } else {
+                    alert('資材マスターへの登録に失敗しました。');
+                }
+            }
         }
     }, [onUpdateCart]);
 

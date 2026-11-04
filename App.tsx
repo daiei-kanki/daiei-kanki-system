@@ -209,8 +209,8 @@ const App: React.FC = () => {
         try {
             const results = await generateMaterialsFromFile(file, '消耗品・雑材');
             if (results.length > 0) {
-                await storage.importMaterials(results);
-                alert(`${results.length}件の資材をインポートしました。`);
+                const { addedCount, updatedCount } = await storage.importMaterials(results);
+                alert(`資材インポート完了：新規登録 ${addedCount.toLocaleString()}件 / 既存更新 ${updatedCount.toLocaleString()}件`);
             }
         } catch (err) {
             alert("AI解析中にエラーが発生しました。");
@@ -245,10 +245,10 @@ const App: React.FC = () => {
                         alert("無効なバックアップファイル形式です。");
                         return;
                     }
-                    if (window.confirm(`${json.length}件の資材データを復元（追加）しますか？`)) {
+                    if (window.confirm(`${json.length}件の資材データを復元しますか？（既存資材はIDまたは品名・型式・寸法・分類で上書き更新されます）`)) {
                         setLoadingAI(true);
-                        await storage.importMaterials(json);
-                        alert("復元が完了しました。");
+                        const { addedCount, updatedCount } = await storage.importMaterials(json);
+                        alert(`復元が完了しました（新規登録 ${addedCount.toLocaleString()}件 / 既存更新 ${updatedCount.toLocaleString()}件）。`);
                     }
                 } catch (e) {
                     alert("ファイルの解析に失敗しました。JSON形式であることを確認してください。");
@@ -385,8 +385,8 @@ const App: React.FC = () => {
 
             if (!window.confirm(`${mapped.length.toLocaleString()}件のExcelデータをインポートしますか？\n（既存資材はIDまたは品名・型式・寸法・分類で上書き更新され、新規資材は追加されます）`)) return;
             setLoadingAI(true);
-            await storage.importMaterials(mapped);
-            alert(`${mapped.length.toLocaleString()}件をインポートしました。`);
+            const { addedCount, updatedCount } = await storage.importMaterials(mapped);
+            alert(`インポート完了：新規登録 ${addedCount.toLocaleString()}件 / 既存更新 ${updatedCount.toLocaleString()}件`);
         } catch (err) {
             alert('Excelの読み込みに失敗しました。列名を確認してください。');
         } finally {
@@ -708,8 +708,8 @@ const App: React.FC = () => {
                         onUpdateInfo={info => { if (info.customerName) setActiveCustomer(info.customerName); }}
                         onRegisterItems={async items => {
                             try {
-                                await storage.importMaterials(items);
-                                alert(`${items.length}件の資材をマスターに登録しました。`);
+                                const { addedCount, updatedCount } = await storage.importMaterials(items);
+                                alert(`資材マスター反映完了：新規登録 ${addedCount}件 / 既存更新 ${updatedCount}件`);
                             } catch (e) {
                                 alert("登録に失敗しました。");
                             }

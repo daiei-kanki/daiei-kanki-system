@@ -159,8 +159,8 @@ export const bulkSetCategory = async (ids: string[], newCategory: string) => {
     await batch.commit();
 };
 
-export const importMaterials = async (items: Partial<Material>[]) => {
-    // 既存資材を取得し、ID一致または「品名＋型式＋寸法＋分類」一致で上書き更新（upsert）する
+export const importMaterials = async (items: Partial<Material>[]): Promise<{ addedCount: number; updatedCount: number }> => {
+    // 既存資材を取得し、ID一致または「品名＋型式＋寸法＋分類」4項目一致（addMaterialと同一基準）で重複追加を防ぎ上書き更新（upsert）する
     const existingSnap = await getDocs(collection(db, COLLECTIONS.MATERIALS));
     const existingById = new Map<string, Material>();
     const existingByKey = new Map<string, Material>();
@@ -170,7 +170,7 @@ export const importMaterials = async (items: Partial<Material>[]) => {
         const model = (m.model || '').trim();
         const dims = (m.dimensions || '').trim();
         const cat = (m.category || '消耗品・雑材').trim();
-        if (!name || (!model && !dims)) return null;
+        if (!name) return null;
         return [name, model, dims, cat].join('||');
     };
 
@@ -183,19 +183,29 @@ export const importMaterials = async (items: Partial<Material>[]) => {
         }
     });
 
-    const operations: { ref: any; data: any; merge: boolean }[] = [];
+    const operationsById = new Map<string, { ref: any; data: any; merge: boolean; isUpdate: boolean }>();
     const now = Date.now();
 
     items.forEach(item => {
-        const rawId = typeof item.id === 'string' ? item.id.trim() : '';
-        const k = makeKey(item);
+        const name = (item.name || '').trim();
+        if (!name) return;
+        const normalizedItem: Partial<Material> = {
+            ...item,
+            name,
+            model: (item.model || '').trim(),
+            dimensions: (item.dimensions || '').trim(),
+            category: (item.category || '消耗品・雑材').trim() || '消耗品・雑材'
+        };
+
+        const rawId = typeof normalizedItem.id === 'string' ? normalizedItem.id.trim() : '';
+        const k = makeKey(normalizedItem);
         const matched = (rawId && existingById.get(rawId)) || (k ? existingByKey.get(k) : undefined);
 
-        const { id: _, ...rawData } = item as any;
+        const { id: _, ...rawData } = normalizedItem as any;
         const cleanData = removeUndefined(rawData);
 
         if (matched) {
-            // 既存資材に実在庫(>0)があり、取込側の数量が未指定または0の場合は実在庫を保護する
+            // 既存資材（または同一バッチ内の先行行）に実在庫(>0)があり、取込側の数量が未指定または0の場合は実在庫を保護する
             const existingQty = matched.quantity || 0;
             const incomingQty = cleanData.quantity;
             const preservedQty = (existingQty > 0 && (incomingQty === undefined || incomingQty === 0))
@@ -203,20 +213,35 @@ export const importMaterials = async (items: Partial<Material>[]) => {
                 : (incomingQty ?? existingQty);
 
             const ref = doc(db, COLLECTIONS.MATERIALS, matched.id);
-            operations.push({
+            const mergedData = { ...cleanData, quantity: preservedQty, updatedAt: now };
+            const prevOp = operationsById.get(matched.id);
+            operationsById.set(matched.id, {
                 ref,
-                data: { ...cleanData, quantity: preservedQty, updatedAt: now },
-                merge: true
+                data: prevOp ? { ...prevOp.data, ...mergedData } : mergedData,
+                merge: true,
+                isUpdate: prevOp ? prevOp.isUpdate : true
             });
+
+            const updatedMat = { ...matched, ...mergedData, id: matched.id } as Material;
+            existingById.set(matched.id, updatedMat);
+            if (k) existingByKey.set(k, updatedMat);
         } else {
             const ref = doc(collection(db, COLLECTIONS.MATERIALS));
-            operations.push({
+            const newData = { quantity: 0, ...cleanData, updatedAt: now };
+            operationsById.set(ref.id, {
                 ref,
-                data: { quantity: 0, ...cleanData, updatedAt: now },
-                merge: false
+                data: newData,
+                merge: false,
+                isUpdate: false
             });
+
+            const newMat = { ...newData, id: ref.id } as Material;
+            existingById.set(ref.id, newMat);
+            if (k) existingByKey.set(k, newMat);
         }
     });
+
+    const operations = Array.from(operationsById.values());
 
     // Firestoreのバッチ書き込みは500件が上限のため、チャンクに分割して処理する
     const CHUNK_SIZE = 499;
@@ -232,6 +257,10 @@ export const importMaterials = async (items: Partial<Material>[]) => {
         });
         await batch.commit();
     }
+
+    const addedCount = operations.filter(op => !op.isUpdate).length;
+    const updatedCount = operations.filter(op => op.isUpdate).length;
+    return { addedCount, updatedCount };
 };
 
 export const addCustomer = async (c: Omit<Customer, 'id'>) => {
