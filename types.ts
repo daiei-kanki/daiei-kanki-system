@@ -156,6 +156,9 @@ export interface Slip {
   documentTotal?: number;
   documentTax?: number;
   documentGrandTotal?: number;
+  // 発行済み請求書控え（スナップショット固定保存）用
+  snapshotPages?: Slip[];
+  snapshotSavedAt?: number;
 }
 
 export type EstimateStatus = 'pending' | 'accepted' | 'rejected' | 'converted';

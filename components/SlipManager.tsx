@@ -993,8 +993,9 @@ export const SlipManager: React.FC<{
                     const covTotalPages = Math.ceil(slip.siteSummaries.length / maxSitesPerCover);
                     for (let i = 0; i < slip.siteSummaries.length; i += maxSitesPerCover) {
                         const pageIdx = Math.floor(i / maxSitesPerCover) + 1;
+                        const { snapshotPages: _sp, ...restSlip } = slip as any;
                         result.push({
-                            ...slip,
+                            ...restSlip,
                             id: pageIdx === 1 ? slip.id : `${slip.id || 'cover'}-pg${pageIdx}`,
                             siteSummaries: slip.siteSummaries.slice(i, i + maxSitesPerCover),
                             coverPageNum: pageIdx,
@@ -2008,22 +2009,6 @@ export const SlipManager: React.FC<{
             };
 
             const coverDocId = existingCover?.id || deterministicCoverId;
-            if (existingCover?.id) {
-                storage.updateSlip(coverDocId, {
-                    ...(matchedCustomer?.id ? { customerId: matchedCustomer.id } : {}),
-                    totalAmount: totalNet,
-                    taxAmount: totalTax,
-                    grandTotal: currentGrandTotal,
-                    carriedForwardAmount: carriedFwd,
-                    date: end,
-                    orderDate: start,
-                    siteSummaries: siteEntries.map(([name, total]) => ({ name, total }))
-                }).catch(console.error);
-            } else {
-                // 決定的IDで非同期保存（オフライン時もプレビュー表示をブロックせず、連打や複数画面でも1枚に収束）
-                storage.setSlipWithId(coverDocId, coverData).catch(console.error);
-            }
-
             allDocs.push({
                 ...coverData,
                 id: coverDocId
@@ -2139,8 +2124,87 @@ export const SlipManager: React.FC<{
                 } as Slip);
             }
         });
+
+        // 発行時点の請求書一式（現場別計算書・納品明細書・請求明細書）を「発行済請求書控え」として固定保存
+        if (allDocs.length > 0) {
+            const snapshotSavedAt = Date.now();
+            const snapshotPages = allDocs.slice(1).map(d => cleanForFirestore(d) as Slip);
+            const safeCustKey = matchedCustomer?.id || encodeURIComponent(cName).replace(/[%\/.#$[\]]/g, '_');
+
+            if (!targetSite) {
+                const coverDoc = allDocs[0];
+                const coverDocId = coverDoc.id || `cover_${safeCustKey}_INV-${targetMonth.replace('-', '')}`;
+                const fullCoverData = cleanForFirestore({
+                    ...coverDoc,
+                    ...(matchedCustomer?.id ? { customerId: matchedCustomer.id } : {}),
+                    snapshotPages,
+                    snapshotSavedAt
+                });
+                storage.setSlipWithId(coverDocId, fullCoverData).catch(console.error);
+                allDocs[0] = { ...coverDoc, id: coverDocId, snapshotPages, snapshotSavedAt };
+            } else {
+                const siteCoverDoc = allDocs[0];
+                const siteCoverDocId = `cover_site_${safeCustKey}_${siteCoverDoc.slipNumber || 'DET'}`;
+                const fullSiteCoverData = cleanForFirestore({
+                    ...siteCoverDoc,
+                    ...(matchedCustomer?.id ? { customerId: matchedCustomer.id } : {}),
+                    snapshotPages,
+                    snapshotSavedAt
+                });
+                storage.setSlipWithId(siteCoverDocId, fullSiteCoverData).catch(console.error);
+                allDocs[0] = { ...siteCoverDoc, id: siteCoverDocId, snapshotPages, snapshotSavedAt };
+            }
+        }
+
         setPrintingSlips(allDocs);
     };
+
+    const handleExportInvoiceSnapshotFile = useCallback(() => {
+        if (rawPrintingSlips.length === 0) return;
+        try {
+            const first = rawPrintingSlips[0];
+            const custLabel = (first.customerName || '請求書').replace(/[\\/:*?"<>|]/g, '_');
+            const slipNoLabel = (first.slipNumber || targetMonth).replace(/[\\/:*?"<>|]/g, '_');
+            const payload = {
+                exportedAt: new Date().toISOString(),
+                customerName: first.customerName,
+                targetMonth,
+                slipNumber: first.slipNumber,
+                pages: rawPrintingSlips
+            };
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+            const a = document.createElement('a');
+            a.setAttribute('href', dataStr);
+            a.setAttribute('download', `請求書控え_${custLabel}_${slipNoLabel}.json`);
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        } catch (e) {
+            alert('控えファイルの保存に失敗しました。');
+        }
+    }, [rawPrintingSlips, targetMonth]);
+
+    const handleImportInvoiceSnapshotFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const parsed = JSON.parse(String(ev.target?.result || ''));
+                const pages: Slip[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.pages) ? parsed.pages : []);
+                if (pages.length === 0) {
+                    alert('有効な請求書控えデータが見つかりませんでした。');
+                    return;
+                }
+                setForceDisplayPrice(false);
+                setPrintingSlips(pages);
+            } catch (err) {
+                alert('控えファイルの読み込みに失敗しました。JSON形式を確認してください。');
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    }, []);
 
     const handleClose = () => {
         if (editingSlipId) {
@@ -2442,6 +2506,11 @@ export const SlipManager: React.FC<{
                                     <span className="text-xs font-mono font-bold text-white w-12 text-center">{Math.round(previewScale * 100)}%</span>
                                     <button onClick={() => setPreviewScale(s => Math.min(3.0, s + 0.1))} className="p-1 hover:bg-slate-600 rounded text-white transition-colors"><Plus size={16} /></button>
                                 </div>
+                                {printingSlips.some(s => s.type === 'cover' || s.type === 'invoice') && (
+                                    <button onClick={handleExportInvoiceSnapshotFile} className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-lg font-bold flex items-center gap-1.5 shadow-lg active:scale-95 transition-all text-xs" title="現在表示している請求書一式を控えファイル(JSON)としてPCに保存">
+                                        <Save size={16} /> 控えをPC保存
+                                    </button>
+                                )}
                                 <button onClick={() => window.print()} className="bg-emerald-600 text-white px-8 py-2.5 rounded-lg font-bold flex items-center gap-2 shadow-lg active:scale-95 transition-all"><Printer size={18} /> 印刷を開始</button>
                             </div>
                         </div>
@@ -2525,7 +2594,14 @@ export const SlipManager: React.FC<{
                                                                 carriedForwardAmount: cf,
                                                                 grandTotal: cf + sales + tax
                                                             };
-                                                            storage.setSlipWithId(baseId, { ...latestCover, ...slip, ...dbUpdates }).catch(console.error);
+                                                            const { coverPageNum: _cp, coverTotalPages: _ct, ...cleanSlip } = slip as any;
+                                                            storage.setSlipWithId(baseId, {
+                                                                ...latestCover,
+                                                                ...cleanSlip,
+                                                                ...dbUpdates,
+                                                                ...(latestCover.snapshotPages ? { snapshotPages: latestCover.snapshotPages } : {}),
+                                                                ...(latestCover.snapshotSavedAt ? { snapshotSavedAt: latestCover.snapshotSavedAt } : {})
+                                                            }).catch(console.error);
                                                         } else {
                                                             storage.updateSlip(baseId, dbUpdates).catch(console.error);
                                                         }
@@ -2874,6 +2950,11 @@ export const SlipManager: React.FC<{
                                     {isAdminUnlocked ? <EyeOff size={20} /> : <Eye size={20} />}
                                     <span className="text-[10px] font-black uppercase tracking-widest hidden lg:inline">{isAdminUnlocked ? 'HIDE TOTAL' : 'SHOW TOTAL'}</span>
                                 </button>
+                                <label className="p-3 rounded-2xl flex items-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 cursor-pointer transition-all shrink-0" title="PCに保存した請求書控えファイル(JSON)を読み込んでプレビュー表示">
+                                    <FileText size={18} />
+                                    <span className="text-[10px] font-black uppercase tracking-widest hidden lg:inline">控え読込</span>
+                                    <input type="file" accept=".json" className="hidden" onChange={handleImportInvoiceSnapshotFile} />
+                                </label>
                             </div>
                             <div className="flex-grow overflow-y-auto space-y-6">
                                 {customerHierarchy.map(([c, sMap]) => (
@@ -2895,7 +2976,35 @@ export const SlipManager: React.FC<{
                                                     </div>
                                                 )}
                                             </div>
-                                            <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto">
+                                            <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 sm:gap-3 w-full sm:w-auto">
+                                                {(() => {
+                                                    const invSlipNo = `INV-${targetMonth.replace('-', '')}`;
+                                                    const matchedCustObj = findCustomerByName(c);
+                                                    const savedCover = slips.find(s =>
+                                                        s.type === 'cover' &&
+                                                        isSlipMatchingCustomer(s, c, matchedCustObj) &&
+                                                        s.constructionName === '全現場一括集計' &&
+                                                        s.slipNumber === invSlipNo &&
+                                                        Array.isArray(s.snapshotPages) &&
+                                                        s.snapshotPages.length > 0
+                                                    );
+                                                    if (!savedCover) return null;
+                                                    const savedDateStr = new Date(savedCover.snapshotSavedAt || savedCover.updatedAt || savedCover.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                                                    return (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setForceDisplayPrice(false);
+                                                                setPrintingSlips([savedCover, ...(savedCover.snapshotPages || [])]);
+                                                            }}
+                                                            className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-3 md:px-4 py-2.5 rounded-2xl text-[10px] font-black shadow-xl active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                                                            title="発行当時に固定保存された請求書控え（明細一式）をそのまま開きます"
+                                                        >
+                                                            <FileText size={13} />
+                                                            <span>発行済控え ({savedDateStr})</span>
+                                                        </button>
+                                                    );
+                                                })()}
                                                 <button onClick={(e) => { e.stopPropagation(); handleInvoiceIssuance(c, null, Array.from(sMap.values()).flat() as Slip[]); }} className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 px-4 md:px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase shadow-xl active:scale-95 transition-all">一括請求書を発行</button>
                                                 {expandedCustomers.has(c) ? <ChevronDown size={24} className="shrink-0" /> : <ChevronRight size={24} className="shrink-0" />}
                                             </div>
@@ -2906,7 +3015,36 @@ export const SlipManager: React.FC<{
                                                     <div key={sNameVal} className="bg-white rounded-[2rem] border overflow-hidden shadow-sm">
                                                         <div className="p-4 bg-slate-100/50 border-b flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                                                             <span className="font-black text-sm px-2 truncate block w-full sm:w-auto">{formatSiteName(sNameVal)}</span>
-                                                            <button onClick={() => handleInvoiceIssuance(c, sNameVal, slipList)} className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95">現場別明細発行</button>
+                                                            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                                                                {(() => {
+                                                                    const formattedSite = formatSiteName(sNameVal);
+                                                                    const matchedCustObj = findCustomerByName(c);
+                                                                    const savedSiteCover = slips.find(s =>
+                                                                        s.type === 'cover' &&
+                                                                        isSlipMatchingCustomer(s, c, matchedCustObj) &&
+                                                                        s.constructionName === formattedSite &&
+                                                                        s.slipNumber?.startsWith(`DET-${targetMonth.replace('-', '')}-`) &&
+                                                                        Array.isArray(s.snapshotPages) &&
+                                                                        s.snapshotPages.length > 0
+                                                                    );
+                                                                    if (!savedSiteCover) return null;
+                                                                    const savedDateStr = new Date(savedSiteCover.snapshotSavedAt || savedSiteCover.updatedAt || savedSiteCover.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                                                                    return (
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                setForceDisplayPrice(false);
+                                                                                setPrintingSlips([savedSiteCover, ...(savedSiteCover.snapshotPages || [])]);
+                                                                            }}
+                                                                            className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95 flex items-center justify-center gap-1"
+                                                                            title="発行当時に固定保存された現場別明細控えをそのまま開きます"
+                                                                        >
+                                                                            <FileText size={12} />
+                                                                            <span>現場控え ({savedDateStr})</span>
+                                                                        </button>
+                                                                    );
+                                                                })()}
+                                                                <button onClick={() => handleInvoiceIssuance(c, sNameVal, slipList)} className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95">現場別明細発行</button>
+                                                            </div>
                                                         </div>
                                                         <div className="divide-y">
                                                             {slipList.map(sl => (
