@@ -148,24 +148,39 @@ const getSlipLabel = (type: SlipType, constructionName?: string) => {
 };
 
 const splitSlipIntoPages = (slip: Slip): Slip[] => {
-    if (!slip.items || slip.items.length <= 16) return [{ ...slip, documentTotal: slip.totalAmount, documentTax: slip.taxAmount, documentGrandTotal: slip.grandTotal }];
-    const pages: Slip[] = [];
-    const totalNet = slip.items.reduce((acc, i) => acc + ((i.appliedPrice || 0) * (i.deliveredQuantity ?? i.quantity)), 0);
+    const items = slip.items || [];
+    const totalNet = items.reduce((acc, i) => acc + ((i.appliedPrice || 0) * (i.deliveredQuantity ?? i.quantity)), 0);
     const totalTax = Math.round(totalNet * 0.1);
     const totalGrand = totalNet + totalTax;
+    const docTotalPages = Math.max(1, Math.ceil(items.length / 16));
 
-    for (let i = 0; i < slip.items.length; i += 16) {
-        const chunk = slip.items.slice(i, i + 16);
+    if (items.length <= 16) {
+        return [{
+            ...slip,
+            documentTotal: slip.documentTotal ?? totalNet,
+            documentTax: slip.documentTax ?? totalTax,
+            documentGrandTotal: slip.documentGrandTotal ?? totalGrand,
+            docPageNum: (slip as any).docPageNum ?? 1,
+            docTotalPages: (slip as any).docTotalPages ?? 1
+        } as Slip];
+    }
+
+    const pages: Slip[] = [];
+    for (let i = 0; i < items.length; i += 16) {
+        const chunk = items.slice(i, i + 16);
         const chunkNet = chunk.reduce((acc, i) => acc + ((i.appliedPrice || 0) * (i.deliveredQuantity ?? i.quantity)), 0);
+        const pageIdx = Math.floor(i / 16) + 1;
         pages.push({
             ...slip,
-            id: `${slip.id || generateId()}-pg${Math.floor(i / 16) + 1}`,
+            id: `${slip.id || generateId()}-pg${pageIdx}`,
             items: chunk,
             totalAmount: chunkNet,
             documentTotal: totalNet,
             documentTax: totalTax,
-            documentGrandTotal: totalGrand
-        });
+            documentGrandTotal: totalGrand,
+            docPageNum: pageIdx,
+            docTotalPages
+        } as Slip);
     }
     return pages;
 };
@@ -529,23 +544,53 @@ const SlipPage: React.FC<{
                         )}
                     </div>
 
-                    {displayPrice && (
-                        <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[200px] shadow-sm">
-                            {isDetail ? (
-                                <div className="space-y-1">
-                                    <div className="flex justify-between text-base pt-1 font-black text-slate-900">
-                                        <span className="text-slate-700">税抜合計金額 (10%対象)</span>
-                                        <span className="font-mono underline underline-offset-2 decoration-double decoration-slate-900">¥{pageTotal.toLocaleString()}</span>
+                    {displayPrice && (() => {
+                        const docPageNum: number = (slip as any).docPageNum || 1;
+                        const docTotalPages: number = (slip as any).docTotalPages || 1;
+                        const isMultiPageDoc = docTotalPages > 1;
+                        const isFinalDocPage = docPageNum >= docTotalPages;
+                        const docTotal = slip.documentTotal !== undefined ? slip.documentTotal : pageTotal;
+                        const docTax = slip.documentTax !== undefined ? slip.documentTax : Math.round(docTotal * 0.1);
+                        const docGrandTotal = slip.documentGrandTotal !== undefined ? slip.documentGrandTotal : (docTotal + docTax);
+                        const fmtYen = (v: number) => v < 0 ? `▲¥${Math.abs(v).toLocaleString()}` : `¥${v.toLocaleString()}`;
+
+                        if (isMultiPageDoc && !isFinalDocPage) {
+                            return (
+                                <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[240px] shadow-sm">
+                                    <div className="flex justify-between items-baseline gap-4 text-xs font-black text-slate-800">
+                                        <span className="text-slate-600">ページ小計 (税抜) [{docPageNum}/{docTotalPages}頁]</span>
+                                        <span className="font-mono text-sm">{fmtYen(pageTotal)}</span>
+                                    </div>
+                                    <div className="text-[8px] font-bold text-slate-500 text-right mt-1 border-t border-slate-200 pt-0.5">
+                                        ※全体の合計金額は最終頁({docTotalPages}頁目)に記載
                                     </div>
                                 </div>
-                            ) : (
-                                <>
-                                    <div className="text-center font-bold text-[8px] border-b border-slate-300 pb-1 mb-1 text-slate-500 uppercase tracking-widest">御計算金額 (税抜)</div>
-                                    <div className="text-xl font-mono font-black text-center">{pageTotal < 0 ? `▲¥${Math.abs(pageTotal).toLocaleString()}` : `¥${pageTotal.toLocaleString()}`}</div>
-                                </>
-                            )}
-                        </div>
-                    )}
+                            );
+                        }
+
+                        return (
+                            <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[240px] shadow-sm space-y-0.5">
+                                {isMultiPageDoc && (
+                                    <div className="flex justify-between items-baseline gap-4 text-[9px] font-bold text-slate-500 border-b border-slate-200 pb-0.5 mb-0.5">
+                                        <span>この頁の小計 (税抜) [{docPageNum}/{docTotalPages}頁]</span>
+                                        <span className="font-mono">{fmtYen(pageTotal)}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between items-baseline gap-4 text-[11px] font-black text-slate-800">
+                                    <span className="text-slate-600">{isDetail ? '税抜合計金額 (10%対象)' : '御計算金額 (税抜)'}</span>
+                                    <span className="font-mono text-xs">{fmtYen(docTotal)}</span>
+                                </div>
+                                <div className="flex justify-between items-baseline gap-4 text-[10px] font-bold text-slate-600">
+                                    <span>消費税 (10%)</span>
+                                    <span className="font-mono">{fmtYen(docTax)}</span>
+                                </div>
+                                <div className="flex justify-between items-baseline gap-4 text-xs font-black text-slate-900 border-t border-slate-300 pt-0.5">
+                                    <span>税込合計金額</span>
+                                    <span className="font-mono text-sm underline underline-offset-2 decoration-double decoration-slate-900">{fmtYen(docGrandTotal)}</span>
+                                </div>
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {!isDetail && (
@@ -906,17 +951,20 @@ export const SlipManager: React.FC<{
             }
             const limit = 16;
             if (!slip.items || slip.items.length <= limit) {
-                result.push(slip);
-                return;
-            }
-            for (let i = 0; i < slip.items.length; i += limit) {
-                const chunk = slip.items.slice(i, i + limit);
+                const net = slip.documentTotal ?? slip.items?.reduce((acc, i) => acc + ((i.appliedPrice || 0) * (i.deliveredQuantity ?? i.quantity)), 0) ?? slip.totalAmount ?? 0;
+                const tax = slip.documentTax ?? Math.round(net * 0.1);
+                const grand = slip.documentGrandTotal ?? (net + tax);
                 result.push({
                     ...slip,
-                    id: `${slip.id || 'p'}-pg${Math.floor(i/limit) + 1}`,
-                    items: chunk,
-                });
+                    documentTotal: net,
+                    documentTax: tax,
+                    documentGrandTotal: grand,
+                    docPageNum: (slip as any).docPageNum ?? 1,
+                    docTotalPages: (slip as any).docTotalPages ?? 1
+                } as Slip);
+                return;
             }
+            result.push(...splitSlipIntoPages(slip));
         });
         return result;
     }, [rawPrintingSlips]);
@@ -1905,9 +1953,11 @@ export const SlipManager: React.FC<{
                     ? originalSlip.customerOrderNumber.trim() 
                     : undefined;
 
+                const dTotalPages = Math.max(1, Math.ceil(dItems.length / 16));
                 for (let i = 0; i < dItems.length; i += 16) {
                     const chunk = dItems.slice(i, i + 16);
                     const chunkNet = chunk.reduce((acc, b) => acc + ((b.appliedPrice || 0) * (b.deliveredQuantity || 0)), 0);
+                    const dPageNum = Math.floor(i / 16) + 1;
                     allDocs.push({
                         ...baseMeta,
                         id: `delivery-${sName}-${sourceSlipNo}-${i}`,
@@ -1917,6 +1967,8 @@ export const SlipManager: React.FC<{
                         documentTotal: dNet,
                         documentTax: dTax,
                         documentGrandTotal: dNet + dTax,
+                        docPageNum: dPageNum,
+                        docTotalPages: dTotalPages,
                         date: date,
                         orderDate: originalSlip?.orderDate || orderDate || '',
                         slipNumber: `DLV-${sourceSlipNo}${i > 0 ? `-${i/16 + 1}` : ''}`,
@@ -1934,9 +1986,11 @@ export const SlipManager: React.FC<{
             });
 
             // 請求明細書 (一覧形式維持)
+            const sTotalPages = Math.max(1, Math.ceil(sItems.length / 16));
             for (let i = 0; i < sItems.length; i += 16) {
                 const chunk = sItems.slice(i, i + 16);
                 const chunkNet = chunk.reduce((acc, b) => acc + ((b.appliedPrice || 0) * (b.deliveredQuantity || 0)), 0);
+                const sPageNum = Math.floor(i / 16) + 1;
                 allDocs.push({
                     ...baseMeta,
                     id: `invoice-${sName}-${i}`,
@@ -1946,8 +2000,10 @@ export const SlipManager: React.FC<{
                     documentTotal: sNet,
                     documentTax: sTax,
                     documentGrandTotal: sNet + sTax,
-                    slipNumber: `${siteSlipNo}-I${i / 16 + 1}`
-                });
+                    docPageNum: sPageNum,
+                    docTotalPages: sTotalPages,
+                    slipNumber: `${siteSlipNo}-I${sPageNum}`
+                } as Slip);
             }
         });
         setPrintingSlips(allDocs);
