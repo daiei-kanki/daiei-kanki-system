@@ -1110,7 +1110,7 @@ export const SlipManager: React.FC<{
             let changed = false;
             const next = prev.map(pSlip => {
                 if (pSlip.type !== 'cover' || !pSlip.id || pSlip.id.startsWith('site-cover-')) return pSlip;
-                const live = slips.find(s => s.id === pSlip.id || (s.type === 'cover' && s.customerName === pSlip.customerName && s.constructionName === '全現場一括集計' && s.slipNumber === pSlip.slipNumber));
+                const live = slips.find(s => s.id === pSlip.id || (s.type === 'cover' && ((pSlip.customerId && s.customerId === pSlip.customerId) || s.customerName === pSlip.customerName || normalizeForSearch(s.customerName || '') === normalizeForSearch(pSlip.customerName || '')) && s.constructionName === '全現場一括集計' && s.slipNumber === pSlip.slipNumber));
                 if (!live) return pSlip;
                 const livePrev = live.previousBillingAmount || 0;
                 const livePay = live.paymentReceived || 0;
@@ -1220,13 +1220,35 @@ export const SlipManager: React.FC<{
         }
     };
 
+    const findCustomerByName = useCallback((name: string): Customer | undefined => {
+        if (!name) return undefined;
+        const norm = normalizeForSearch(name);
+        return customers.find(c => c.name === name) || customers.find(c => normalizeForSearch(c.name) === norm);
+    }, [customers]);
+
+    const findCustomerForSlip = useCallback((s: Slip): Customer | undefined => {
+        if (s.customerId) {
+            const byId = customers.find(c => c.id === s.customerId);
+            if (byId) return byId;
+        }
+        return findCustomerByName(s.customerName);
+    }, [customers, findCustomerByName]);
+
+    const isSlipMatchingCustomer = useCallback((s: Slip, targetName: string, targetCustomer?: Customer): boolean => {
+        if (targetCustomer?.id && s.customerId) {
+            return s.customerId === targetCustomer.id;
+        }
+        return s.customerName === targetName || normalizeForSearch(s.customerName || '') === normalizeForSearch(targetName);
+    }, []);
+
     const existingSiteNames = useMemo(() => {
         if (!customerName) return [];
+        const targetCust = findCustomerByName(customerName);
         const sites = new Set<string>();
-        // 実納品実績（仮納品書・納品書）がある現場名のみを取得
+        // 実納品実績（仮納品書・納品書）がある現場名のみを取得（customerId優先）
         slips.forEach(s => {
             if (
-                s.customerName === customerName &&
+                isSlipMatchingCustomer(s, customerName, targetCust) &&
                 (s.type === 'provisional' || s.type === 'delivery') &&
                 s.constructionName && s.constructionName.trim()
             ) {
@@ -1234,7 +1256,7 @@ export const SlipManager: React.FC<{
             }
         });
         return Array.from(sites).sort();
-    }, [customerName, slips]);
+    }, [customerName, slips, findCustomerByName, isSlipMatchingCustomer]);
 
 
     const filteredSiteSuggestions = useMemo(() => {
@@ -1276,10 +1298,11 @@ export const SlipManager: React.FC<{
 
         const normalizedCustomer = normalizeForSearch(customerName);
         const normalizedSiteName = normalizeForSearch(siteName);
+        const targetCust = findCustomerByName(customerName);
 
         const matchingSlips = slips.filter(s => {
             if (s.id === editingSlipId) return false;
-            const isCustMatch = s.customerName === customerName || normalizeForSearch(s.customerName || '') === normalizedCustomer;
+            const isCustMatch = isSlipMatchingCustomer(s, customerName, targetCust);
             const isSiteMatch = normalizeForSearch(s.constructionName || '') === normalizedSiteName;
             return isCustMatch && isSiteMatch;
         });
@@ -1607,7 +1630,7 @@ export const SlipManager: React.FC<{
                 ? (existingSiteNames.find(es => normalizeForSearch(es) === normalizeForSearch(siteName.trim())) || siteName.trim())
                 : siteName;
 
-            const matchedCustomer = customers.find(c => c.name === customerName);
+            const matchedCustomer = findCustomerByName(customerName);
             const finalCustomerId = matchedCustomer?.id;
             let finalSiteId: string | undefined = undefined;
 
@@ -1827,7 +1850,7 @@ export const SlipManager: React.FC<{
     };
 
     const handleInvoiceIssuance = async (cName: string, targetSite: string | null, _passedSlips: Slip[]) => {
-        const matchedCustomer = customers.find(c => c.name === cName);
+        const matchedCustomer = findCustomerByName(cName);
         const closingDay = matchedCustomer?.closingDay || 99;
         const [y, m] = targetMonth.split('-').map(Number);
         
@@ -1847,8 +1870,8 @@ export const SlipManager: React.FC<{
             start = `${py}-${String(pm).padStart(2, '0')}-${String(startDay).padStart(2, '0')}`;
             end = `${y}-${String(m).padStart(2, '0')}-${String(closingDay).padStart(2, '0')}`;
         }
-        // 履歴検索欄のキーワード残りに左右されないよう、対象顧客の全確定伝票(archivedSlips)から集計
-        const allSlipsForCustomer = archivedSlips.filter(s => s.customerName === cName);
+        // 履歴検索欄のキーワード残りに左右されないよう、対象顧客の全確定伝票(archivedSlips)からcustomerId優先で集計
+        const allSlipsForCustomer = archivedSlips.filter(s => isSlipMatchingCustomer(s, cName, matchedCustomer));
         const validSlips = allSlipsForCustomer.filter(s => {
             if (s.type === 'return') {
                 return s.date >= start && s.date <= end;
@@ -1922,7 +1945,7 @@ export const SlipManager: React.FC<{
 
             const matchingCovers = slips.filter(s => 
                 s.type === 'cover' && 
-                s.customerName === cName && 
+                isSlipMatchingCustomer(s, cName, matchedCustomer) && 
                 s.constructionName === '全現場一括集計' &&
                 s.slipNumber === invSlipNumber
             );
@@ -1951,7 +1974,7 @@ export const SlipManager: React.FC<{
                 const prevInvSlipNumber = `INV-${prevTargetMonth.replace('-', '')}`;
                 const prevMonthCover = slips.find(s => 
                     s.type === 'cover' && 
-                    s.customerName === cName && 
+                    isSlipMatchingCustomer(s, cName, matchedCustomer) && 
                     s.constructionName === '全現場一括集計' && 
                     s.slipNumber === prevInvSlipNumber
                 );
@@ -2214,8 +2237,9 @@ export const SlipManager: React.FC<{
         };
 
         archivedSlips.filter(s => matches(s)).forEach(s => {
-            const customer = customers.find(c => c.name === s.customerName);
+            const customer = findCustomerForSlip(s);
             const closingDay = customer?.closingDay || 99;
+            const canonicalCustomerName = customer?.name || s.customerName;
             
             let start: string, end: string;
             if (closingDay === 99) {
@@ -2233,8 +2257,8 @@ export const SlipManager: React.FC<{
                 ? (s.date >= start && s.date <= end)
                 : ((s.date >= start && s.date <= end) || s.items?.some(i => i.date && i.date >= start && i.date <= end));
             if (isInPeriod) {
-                if (!map.has(s.customerName)) map.set(s.customerName, new Map());
-                const siteMap = map.get(s.customerName)!;
+                if (!map.has(canonicalCustomerName)) map.set(canonicalCustomerName, new Map());
+                const siteMap = map.get(canonicalCustomerName)!;
                 const currentSiteKey = s.constructionName || '一般・共通';
                 if (!siteMap.has(currentSiteKey)) siteMap.set(currentSiteKey, []);
                 siteMap.get(currentSiteKey)!.push(s);
