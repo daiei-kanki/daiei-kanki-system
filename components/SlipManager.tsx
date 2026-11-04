@@ -2988,24 +2988,45 @@ export const SlipManager: React.FC<{
                                                         Array.isArray(s.snapshotPages) &&
                                                         s.snapshotPages.length > 0
                                                     );
-                                                    if (!savedCover) return null;
-                                                    const savedDateStr = new Date(savedCover.snapshotSavedAt || savedCover.updatedAt || savedCover.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                                                    const savedDateStr = savedCover
+                                                        ? new Date(savedCover.snapshotSavedAt || savedCover.updatedAt || savedCover.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                                        : '';
                                                     return (
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setForceDisplayPrice(false);
-                                                                setPrintingSlips([savedCover, ...(savedCover.snapshotPages || [])]);
-                                                            }}
-                                                            className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-3 md:px-4 py-2.5 rounded-2xl text-[10px] font-black shadow-xl active:scale-95 transition-all flex items-center justify-center gap-1.5"
-                                                            title="発行当時に固定保存された請求書控え（明細一式）をそのまま開きます"
-                                                        >
-                                                            <FileText size={13} />
-                                                            <span>発行済控え ({savedDateStr})</span>
-                                                        </button>
+                                                        <>
+                                                            {savedCover && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setForceDisplayPrice(false);
+                                                                        setPrintingSlips([savedCover, ...(savedCover.snapshotPages || [])]);
+                                                                    }}
+                                                                    className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-3 md:px-4 py-2.5 rounded-2xl text-[10px] font-black shadow-xl active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                                                                    title="発行当時に固定保存された請求書控え（明細一式）をそのまま開きます"
+                                                                >
+                                                                    <FileText size={13} />
+                                                                    <span>発行済控え ({savedDateStr})</span>
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (savedCover) {
+                                                                        const ok = window.confirm(
+                                                                            `すでに保存済みの請求書控え（${savedDateStr}）があります。\n\n` +
+                                                                            `伝票の修正などを反映して、請求書を作り直しますか？（控えも最新の内容に上書き更新されます）\n\n` +
+                                                                            `※ 変更せず前回の控えを見る場合は「キャンセル」を押して、オレンジ色の「発行済控え」ボタンを押してください。`
+                                                                        );
+                                                                        if (!ok) return;
+                                                                    }
+                                                                    handleInvoiceIssuance(c, null, Array.from(sMap.values()).flat() as Slip[]);
+                                                                }}
+                                                                className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 px-4 md:px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase shadow-xl active:scale-95 transition-all"
+                                                            >
+                                                                {savedCover ? '請求書を再作成 (更新)' : '一括請求書を発行'}
+                                                            </button>
+                                                        </>
                                                     );
                                                 })()}
-                                                <button onClick={(e) => { e.stopPropagation(); handleInvoiceIssuance(c, null, Array.from(sMap.values()).flat() as Slip[]); }} className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 px-4 md:px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase shadow-xl active:scale-95 transition-all">一括請求書を発行</button>
                                                 {expandedCustomers.has(c) ? <ChevronDown size={24} className="shrink-0" /> : <ChevronRight size={24} className="shrink-0" />}
                                             </div>
                                         </div>
@@ -3027,23 +3048,42 @@ export const SlipManager: React.FC<{
                                                                         Array.isArray(s.snapshotPages) &&
                                                                         s.snapshotPages.length > 0
                                                                     );
-                                                                    if (!savedSiteCover) return null;
-                                                                    const savedDateStr = new Date(savedSiteCover.snapshotSavedAt || savedSiteCover.updatedAt || savedSiteCover.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                                                                    const savedDateStr = savedSiteCover
+                                                                        ? new Date(savedSiteCover.snapshotSavedAt || savedSiteCover.updatedAt || savedSiteCover.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                                                        : '';
                                                                     return (
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                setForceDisplayPrice(false);
-                                                                                setPrintingSlips([savedSiteCover, ...(savedSiteCover.snapshotPages || [])]);
-                                                                            }}
-                                                                            className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95 flex items-center justify-center gap-1"
-                                                                            title="発行当時に固定保存された現場別明細控えをそのまま開きます"
-                                                                        >
-                                                                            <FileText size={12} />
-                                                                            <span>現場控え ({savedDateStr})</span>
-                                                                        </button>
+                                                                        <>
+                                                                            {savedSiteCover && (
+                                                                                <button
+                                                                                    onClick={() => {
+                                                                                        setForceDisplayPrice(false);
+                                                                                        setPrintingSlips([savedSiteCover, ...(savedSiteCover.snapshotPages || [])]);
+                                                                                    }}
+                                                                                    className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95 flex items-center justify-center gap-1"
+                                                                                    title="発行当時に固定保存された現場別明細控えをそのまま開きます"
+                                                                                >
+                                                                                    <FileText size={12} />
+                                                                                    <span>現場控え ({savedDateStr})</span>
+                                                                                </button>
+                                                                            )}
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    if (savedSiteCover) {
+                                                                                        const ok = window.confirm(
+                                                                                            `すでに保存済みの現場明細控え（${savedDateStr}）があります。\n\n` +
+                                                                                            `伝票の修正などを反映して、現場別明細を作り直しますか？（控えも最新の内容に上書き更新されます）`
+                                                                                        );
+                                                                                        if (!ok) return;
+                                                                                    }
+                                                                                    handleInvoiceIssuance(c, sNameVal, slipList);
+                                                                                }}
+                                                                                className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95"
+                                                                            >
+                                                                                {savedSiteCover ? '現場明細を再作成' : '現場別明細発行'}
+                                                                            </button>
+                                                                        </>
                                                                     );
                                                                 })()}
-                                                                <button onClick={() => handleInvoiceIssuance(c, sNameVal, slipList)} className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-[10px] font-black shadow-md transition-all active:scale-95">現場別明細発行</button>
                                                             </div>
                                                         </div>
                                                         <div className="divide-y">
