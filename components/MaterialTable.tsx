@@ -81,15 +81,15 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
         return () => clearTimeout(timer);
     }, [filters]);
 
-    // 検索処理の高速化: 各アイテムの検索対象文字列を事前に保持
+    // 検索処理の高速化: 各アイテムの検索対象文字列を正規化して事前に保持（×↔x、全角半角、かなカナ、スペース差を吸収）
     const searchableItems = React.useMemo(() => {
         return items.map(item => ({
             ...item,
-            _searchName: (item.name || '').toLowerCase(),
-            _searchCategory: (item.category || '').toLowerCase(),
-            _searchManufacturer: (item.manufacturer || '').toLowerCase(),
-            _searchModel: `${item.model || ''} ${item.dimensions || ''} ${item.size || ''}`.toLowerCase(),
-            _searchLocation: (item.location || '').toLowerCase()
+            _searchName: normalizeForSearch(item.name || ''),
+            _searchCategory: normalizeForSearch(item.category || ''),
+            _searchManufacturer: normalizeForSearch(item.manufacturer || ''),
+            _searchModel: normalizeForSearch(`${item.model || ''} ${item.dimensions || ''} ${item.size || ''}`),
+            _searchLocation: normalizeForSearch(item.location || '')
         }));
     }, [items]);
 
@@ -227,19 +227,21 @@ export const MaterialTable: React.FC<MaterialTableProps> = ({
 
     const filteredItems = React.useMemo(() => {
         if (!isSearchActive) return [];
-        const fName = deferredFilters.name.toLowerCase();
-        const fCat = deferredFilters.category.toLowerCase();
-        const fMan = deferredFilters.manufacturer.toLowerCase();
-        const fMod = deferredFilters.model.toLowerCase();
-        const fLoc = deferredFilters.location.toLowerCase();
+        const matchField = (target: string, queryStr: string) => {
+            const normQ = normalizeForSearch(queryStr);
+            if (!normQ) return true;
+            const tokens = normQ.split(/\s+/).filter(Boolean);
+            const compactTarget = target.replace(/\s+/g, '');
+            return tokens.every(tok => target.includes(tok) || compactTarget.includes(tok));
+        };
 
         return searchableItems.filter(item => {
             const baseFilter =
-                (!fCat || item._searchCategory.includes(fCat)) &&
-                (!fName || item._searchName.includes(fName)) &&
-                (!fMan || item._searchManufacturer.includes(fMan)) &&
-                (!fMod || item._searchModel.includes(fMod)) &&
-                (!fLoc || item._searchLocation.includes(fLoc));
+                matchField(item._searchCategory, deferredFilters.category) &&
+                matchField(item._searchName, deferredFilters.name) &&
+                matchField(item._searchManufacturer, deferredFilters.manufacturer) &&
+                matchField(item._searchModel, deferredFilters.model) &&
+                matchField(item._searchLocation, deferredFilters.location);
             if (!baseFilter) return false;
             if (showScheduled) return !!item.scheduledPriceDate;
             return true;

@@ -125,14 +125,15 @@ export const normalizeForSearch = (text: string): string => {
     normalized = normalized.toLowerCase();
 
     // 6. Unify dimension/multiplication symbols (× ✕ ✖ * ＊ x X -> x)
-    normalized = normalized.replace(/[×✕✖*＊]/g, 'x');
+    normalized = normalized.replace(/[×✕✖✗✘*＊]/g, 'x');
 
     // 7. Unify hyphens/dashes to "-"
     normalized = normalized.replace(/[ーｰ－‐‑‒–—―⁃\-]/g, '-');
 
-    // 8. Space normalization (full-width to half-width)
+    // 8. Space normalization (full-width to half-width) & collapse spaces around 'x' between digits
     normalized = normalized.replace(/　/g, ' ');
     normalized = normalized.replace(/\s+/g, ' ');
+    normalized = normalized.replace(/(\d)\s*x\s*(\d)/g, '$1x$2');
 
     const result = normalized.trim();
     normalizationCache.set(text, result);
@@ -282,7 +283,14 @@ export const getAppliedPrice = (item: MaterialItem, activeCustomer: string | nul
  * not alphanumeric or Japanese, so "T" won't score 3 against "LT".
  */
 const termScore = (field: string, term: string): number => {
-    if (!field.includes(term)) return 0;
+    if (!field.includes(term)) {
+        const compactField = field.replace(/\s+/g, '');
+        const compactTerm = term.replace(/\s+/g, '');
+        if (compactTerm && compactField.includes(compactTerm)) {
+            return compactField === compactTerm ? 4 : 1;
+        }
+        return 0;
+    }
     if (field === term) return 4;
 
     // Word-boundary check using surrounding characters
