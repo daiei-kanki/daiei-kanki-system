@@ -572,44 +572,43 @@ const SlipPage: React.FC<{
                         const isMultiPageDoc = docTotalPages > 1;
                         const isFinalDocPage = docPageNum >= docTotalPages;
                         const docTotal = slip.documentTotal !== undefined ? slip.documentTotal : pageTotal;
-                        const docTax = slip.documentTax !== undefined ? slip.documentTax : Math.round(docTotal * 0.1);
-                        const docGrandTotal = slip.documentGrandTotal !== undefined ? slip.documentGrandTotal : (docTotal + docTax);
                         const fmtYen = (v: number) => v < 0 ? `▲¥${Math.abs(v).toLocaleString()}` : `¥${v.toLocaleString()}`;
 
                         if (isMultiPageDoc && !isFinalDocPage) {
                             return (
-                                <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[240px] shadow-sm">
+                                <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[220px] shadow-sm">
                                     <div className="flex justify-between items-baseline gap-4 text-xs font-black text-slate-800">
                                         <span className="text-slate-600">ページ小計 (税抜) [{docPageNum}/{docTotalPages}頁]</span>
                                         <span className="font-mono text-sm">{fmtYen(pageTotal)}</span>
                                     </div>
                                     <div className="text-[8px] font-bold text-slate-500 text-right mt-1 border-t border-slate-200 pt-0.5">
-                                        ※全体の合計金額は最終頁({docTotalPages}頁目)に記載
+                                        ※全体の税抜合計は最終頁({docTotalPages}頁目)に記載
                                     </div>
                                 </div>
                             );
                         }
 
                         return (
-                            <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[240px] shadow-sm space-y-0.5">
+                            <div className="border-2 border-slate-800 p-2 bg-slate-50 min-w-[200px] shadow-sm">
                                 {isMultiPageDoc && (
-                                    <div className="flex justify-between items-baseline gap-4 text-[9px] font-bold text-slate-500 border-b border-slate-200 pb-0.5 mb-0.5">
+                                    <div className="flex justify-between items-baseline gap-4 text-[9px] font-bold text-slate-500 border-b border-slate-200 pb-0.5 mb-1">
                                         <span>この頁の小計 (税抜) [{docPageNum}/{docTotalPages}頁]</span>
                                         <span className="font-mono">{fmtYen(pageTotal)}</span>
                                     </div>
                                 )}
-                                <div className="flex justify-between items-baseline gap-4 text-[11px] font-black text-slate-800">
-                                    <span className="text-slate-600">{isDetail ? '税抜合計金額 (10%対象)' : '御計算金額 (税抜)'}</span>
-                                    <span className="font-mono text-xs">{fmtYen(docTotal)}</span>
-                                </div>
-                                <div className="flex justify-between items-baseline gap-4 text-[10px] font-bold text-slate-600">
-                                    <span>消費税 (10%)</span>
-                                    <span className="font-mono">{fmtYen(docTax)}</span>
-                                </div>
-                                <div className="flex justify-between items-baseline gap-4 text-xs font-black text-slate-900 border-t border-slate-300 pt-0.5">
-                                    <span>税込合計金額</span>
-                                    <span className="font-mono text-sm underline underline-offset-2 decoration-double decoration-slate-900">{fmtYen(docGrandTotal)}</span>
-                                </div>
+                                {isDetail ? (
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-base pt-1 font-black text-slate-900 gap-4">
+                                            <span className="text-slate-700">税抜合計金額 (10%対象)</span>
+                                            <span className="font-mono underline underline-offset-2 decoration-double decoration-slate-900">{fmtYen(docTotal)}</span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="text-center font-bold text-[8px] border-b border-slate-300 pb-1 mb-1 text-slate-500 uppercase tracking-widest">御計算金額 (税抜)</div>
+                                        <div className="text-xl font-mono font-black text-center">{fmtYen(docTotal)}</div>
+                                    </>
+                                )}
                             </div>
                         );
                     })()}
